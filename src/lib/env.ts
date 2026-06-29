@@ -9,6 +9,9 @@ const requiredEnvKeys = [
 
 type RequiredEnvKey = (typeof requiredEnvKeys)[number];
 
+const NUVEMSHOP_CALLBACK_URL =
+  "https://compre-junto-nuvemshop-production.up.railway.app/api/nuvemshop/callback";
+
 export type AppEnv = Record<RequiredEnvKey, string>;
 
 let cachedEnv: AppEnv | null = null;
@@ -50,5 +53,5 @@ export function getEnv(): AppEnv {
 }
 
 export function getNuvemshopCallbackUrl(): string {
-  return new URL("/api/nuvemshop/callback", getEnv().NUVEMSHOP_APP_URL).toString();
+  return NUVEMSHOP_CALLBACK_URL;
 }

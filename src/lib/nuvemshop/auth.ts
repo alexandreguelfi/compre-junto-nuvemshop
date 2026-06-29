@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 
 import { getEnv, getNuvemshopCallbackUrl } from "@/src/lib/env";
 
-const NUVEMSHOP_WEB_BASE_URL = "https://www.nuvemshop.com.br";
+const NUVEMSHOP_AUTHORIZE_BASE_URL = "https://www.nuvemshop.com.br/apps/";
 const NUVEMSHOP_TOKEN_URL = "https://www.nuvemshop.com.br/apps/authorize/token";
 const INSTALL_STATE_MAX_AGE_MS = 10 * 60 * 1000;
 
@@ -83,7 +83,7 @@ export function validateInstallState(state: string | null): boolean {
 export function buildInstallUrl(): URL {
   const env = getEnv();
   const state = createInstallState();
-  const url = new URL(`/apps/${encodeURIComponent(env.NUVEMSHOP_CLIENT_ID)}/authorize`, NUVEMSHOP_WEB_BASE_URL);
+  const url = new URL(`${encodeURIComponent(env.NUVEMSHOP_CLIENT_ID)}/authorize`, NUVEMSHOP_AUTHORIZE_BASE_URL);
 
   url.searchParams.set("state", state);
   url.searchParams.set("redirect_uri", getNuvemshopCallbackUrl());
