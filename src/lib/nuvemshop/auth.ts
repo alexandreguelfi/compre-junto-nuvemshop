@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { getEnv, getNuvemshopCallbackUrl } from "@/src/lib/env";
 
 const NUVEMSHOP_AUTHORIZE_BASE_URL = "https://www.nuvemshop.com.br/apps/";
-const NUVEMSHOP_TOKEN_URL = "https://www.nuvemshop.com.br/apps/authorize/token";
+const NUVEMSHOP_TOKEN_URL = "https://www.tiendanube.com/apps/authorize/token";
 const INSTALL_STATE_MAX_AGE_MS = 10 * 60 * 1000;
 
 type InstallStatePayload = {
@@ -19,7 +19,10 @@ export type NuvemshopToken = {
 };
 
 export class NuvemshopAuthError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly safeDetails: Record<string, string | number | boolean | null> = {},
+  ) {
     super(message);
     this.name = "NuvemshopAuthError";
   }
@@ -118,33 +121,71 @@ function asStoreId(value: unknown): string | null {
   return null;
 }
 
+function getTokenEndpointHost(): string {
+  return new URL(NUVEMSHOP_TOKEN_URL).hostname;
+}
+
+async function hasResponseBody(response: Response): Promise<boolean> {
+  try {
+    return Boolean((await response.clone().text()).trim());
+  } catch {
+    return false;
+  }
+}
+
 export async function exchangeCodeForToken(code: string): Promise<NuvemshopToken> {
   const env = getEnv();
   const response = await fetch(NUVEMSHOP_TOKEN_URL, {
     method: "POST",
     headers: {
       Accept: "application/json",
-      "Content-Type": "application/x-www-form-urlencoded",
+      "Content-Type": "application/json",
     },
-    body: new URLSearchParams({
+    body: JSON.stringify({
       client_id: env.NUVEMSHOP_CLIENT_ID,
       client_secret: env.NUVEMSHOP_CLIENT_SECRET,
+      grant_type: "authorization_code",
       code,
-      redirect_uri: getNuvemshopCallbackUrl(),
     }),
     cache: "no-store",
   });
 
   if (!response.ok) {
-    throw new NuvemshopAuthError(`Nuvemshop token exchange failed with status ${response.status}`);
+    throw new NuvemshopAuthError("Nuvemshop token exchange failed", {
+      stage: "token_exchange",
+      httpStatus: response.status,
+      responseBodyPresent: await hasResponseBody(response),
+      responseContentType: response.headers.get("content-type"),
+      tokenEndpointHost: getTokenEndpointHost(),
+    });
   }
 
-  const data = (await response.json()) as Record<string, unknown>;
+  let data: Record<string, unknown>;
+
+  try {
+    data = (await response.json()) as Record<string, unknown>;
+  } catch {
+    throw new NuvemshopAuthError("Nuvemshop token response was not valid JSON", {
+      stage: "token_response_parse",
+      httpStatus: response.status,
+      responseContentType: response.headers.get("content-type"),
+      tokenEndpointHost: getTokenEndpointHost(),
+    });
+  }
+
   const accessToken = typeof data.access_token === "string" ? data.access_token : "";
   const storeId = asStoreId(data.user_id ?? data.store_id);
 
   if (!accessToken || !storeId) {
-    throw new NuvemshopAuthError("Nuvemshop token response was missing required fields");
+    throw new NuvemshopAuthError("Nuvemshop token response was missing required fields", {
+      stage: "token_response_validation",
+      httpStatus: response.status,
+      hasAccessToken: Boolean(accessToken),
+      hasUserId: data.user_id !== undefined,
+      hasStoreId: data.store_id !== undefined,
+      hasScope: data.scope !== undefined,
+      tokenEndpointHost: getTokenEndpointHost(),
+    });
   }
 
   return {

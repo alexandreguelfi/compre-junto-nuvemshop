@@ -17,12 +17,24 @@ function jsonError(message: string, status: number) {
   return NextResponse.json({ error: message }, { status });
 }
 
-function getSafeCallbackError(error: unknown): string {
+function getSafeAuthErrorDetails(error: unknown): Record<string, string | number | boolean | null> {
   if (error instanceof NuvemshopAuthError) {
-    return error.message;
+    return {
+      reason: error.message,
+      ...error.safeDetails,
+    };
   }
 
-  return "Unexpected Nuvemshop callback error.";
+  return {
+    reason: "Unexpected Nuvemshop callback error.",
+  };
+}
+
+function logSafeCallbackFailure(stage: string, details: Record<string, string | number | boolean | null> = {}) {
+  console.warn("Nuvemshop OAuth callback failed.", {
+    stage,
+    ...details,
+  });
 }
 
 export async function GET(request: NextRequest) {
@@ -30,45 +42,90 @@ export async function GET(request: NextRequest) {
   const state = request.nextUrl.searchParams.get("state");
 
   if (!code) {
+    logSafeCallbackFailure("missing_code", {
+      state: state ? "present" : "missing",
+    });
+
     return jsonError("Missing Nuvemshop authorization code.", 400);
   }
 
   if (state && !validateInstallState(state)) {
+    logSafeCallbackFailure("invalid_state", {
+      state: "present",
+    });
+
     return jsonError("Invalid Nuvemshop installation state.", 400);
   }
 
-  try {
-    const token = await exchangeCodeForToken(code);
-    const installedAt = new Date();
+  const token = await exchangeCodeForToken(code).catch((error: unknown) => {
+    logSafeCallbackFailure("token_exchange", {
+      state: state ? "present" : "missing",
+      ...getSafeAuthErrorDetails(error),
+    });
 
+    return null;
+  });
+
+  if (!token) {
+    return jsonError("Unable to exchange Nuvemshop authorization code.", 502);
+  }
+
+  const accessTokenCiphertext = (() => {
+    try {
+      return encryptAccessTokenForStorage(token.accessToken);
+    } catch {
+      logSafeCallbackFailure("token_encryption", {
+        storeId: token.storeId,
+      });
+
+      return null;
+    }
+  })();
+
+  if (!accessTokenCiphertext) {
+    return jsonError("Unable to secure Nuvemshop access token.", 500);
+  }
+
+  const installedAt = new Date();
+
+  try {
     await prisma.store.upsert({
       where: {
         nuvemshopStoreId: token.storeId,
       },
       create: {
         nuvemshopStoreId: token.storeId,
-        accessTokenCiphertext: encryptAccessTokenForStorage(token.accessToken),
+        accessTokenCiphertext,
         scopes: token.scopes,
         status: StoreStatus.CONNECTED,
         installedAt,
         disconnectedAt: null,
       },
       update: {
-        accessTokenCiphertext: encryptAccessTokenForStorage(token.accessToken),
+        accessTokenCiphertext,
         scopes: token.scopes,
         status: StoreStatus.CONNECTED,
         installedAt,
         disconnectedAt: null,
       },
     });
-
-    return NextResponse.redirect(new URL("/admin", getEnv().NUVEMSHOP_APP_URL));
-  } catch (error) {
-    console.warn("Nuvemshop OAuth callback failed.", {
-      reason: getSafeCallbackError(error),
-      state: state ? "present" : "missing",
+  } catch {
+    logSafeCallbackFailure("store_upsert", {
+      storeId: token.storeId,
+      hasAccessToken: true,
+      scopesCount: token.scopes.length,
     });
 
-    return jsonError("Unable to finish Nuvemshop installation.", 502);
+    return jsonError("Unable to save Nuvemshop store installation.", 500);
+  }
+
+  try {
+    return NextResponse.redirect(new URL("/admin", getEnv().NUVEMSHOP_APP_URL));
+  } catch {
+    logSafeCallbackFailure("redirect", {
+      storeId: token.storeId,
+    });
+
+    return jsonError("Nuvemshop installation saved, but redirect failed.", 500);
   }
 }
