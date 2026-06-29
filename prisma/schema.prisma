@@ -60,6 +60,7 @@ model Store {
   products              Product[]
   variants              ProductVariant[]
   bundles               Bundle[]
+  crossSellOffers       CrossSellOffer[]
   webhookEvents         WebhookEvent[]
   auditLogs             AuditLog[]
 
@@ -150,6 +151,34 @@ model BundleItem {
   @@index([bundleId, sortOrder])
   @@index([productId])
   @@index([variantId])
+}
+
+model CrossSellOffer {
+  id                   String                  @id @default(cuid())
+  storeId              String
+  suggestedProductId   String
+  suggestedProductName String
+  isActive             Boolean                 @default(true)
+  createdAt            DateTime                @default(now())
+  updatedAt            DateTime                @updatedAt
+  store                Store                   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  triggers             CrossSellOfferTrigger[]
+
+  @@index([storeId, isActive])
+  @@index([storeId, createdAt])
+}
+
+model CrossSellOfferTrigger {
+  id                 String         @id @default(cuid())
+  offerId            String
+  triggerProductId   String
+  triggerProductName String
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+  offer              CrossSellOffer @relation(fields: [offerId], references: [id], onDelete: Cascade)
+
+  @@unique([offerId, triggerProductId])
+  @@index([offerId])
 }
 
 model WebhookEvent {

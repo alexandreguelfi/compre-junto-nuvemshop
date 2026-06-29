@@ -1,31 +1,9 @@
-import { StoreStatus } from "@/lib/generated/prisma/client";
-import { prisma } from "@/src/lib/prisma";
+import Link from "next/link";
+
+import { getConnectedStore } from "@/src/lib/stores/current-store";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-
-async function getConnectedStore() {
-  try {
-    return await prisma.store.findFirst({
-      where: {
-        status: StoreStatus.CONNECTED,
-        accessTokenCiphertext: {
-          not: null,
-        },
-      },
-      orderBy: {
-        updatedAt: "desc",
-      },
-      select: {
-        installedAt: true,
-        nuvemshopStoreId: true,
-        updatedAt: true,
-      },
-    });
-  } catch {
-    return null;
-  }
-}
 
 export default async function AdminPage() {
   const connectedStore = await getConnectedStore();
@@ -44,20 +22,28 @@ export default async function AdminPage() {
             : "Instale o app pela Nuvemshop para conectar uma loja e validar o fluxo inicial."}
         </p>
         {connectedStore ? (
-          <dl className="grid gap-3 border-t border-zinc-200 pt-5 text-sm text-zinc-600">
-            <div className="flex items-center justify-between gap-4">
-              <dt className="font-medium text-zinc-800">Status</dt>
-              <dd>Conectada</dd>
-            </div>
-            <div className="flex items-center justify-between gap-4">
-              <dt className="font-medium text-zinc-800">Loja Nuvemshop</dt>
-              <dd>{connectedStore.nuvemshopStoreId}</dd>
-            </div>
-            <div className="flex items-center justify-between gap-4">
-              <dt className="font-medium text-zinc-800">Instalada em</dt>
-              <dd>{connectedStore.installedAt.toLocaleString("pt-BR")}</dd>
-            </div>
-          </dl>
+          <>
+            <dl className="grid gap-3 border-t border-zinc-200 pt-5 text-sm text-zinc-600">
+              <div className="flex items-center justify-between gap-4">
+                <dt className="font-medium text-zinc-800">Status</dt>
+                <dd>Conectada</dd>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <dt className="font-medium text-zinc-800">Loja Nuvemshop</dt>
+                <dd>{connectedStore.nuvemshopStoreId}</dd>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <dt className="font-medium text-zinc-800">Instalada em</dt>
+                <dd>{connectedStore.installedAt.toLocaleString("pt-BR")}</dd>
+              </div>
+            </dl>
+            <Link
+              href="/admin/ofertas"
+              className="inline-flex h-10 items-center justify-center rounded-md bg-zinc-950 px-4 text-sm font-medium text-white transition hover:bg-zinc-800"
+            >
+              Gerenciar ofertas
+            </Link>
+          </>
         ) : null}
       </section>
     </main>
