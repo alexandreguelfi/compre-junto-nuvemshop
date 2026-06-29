@@ -33,8 +33,8 @@ export default async function AdminPage() {
                 <dd>{connectedStore.nuvemshopStoreId}</dd>
               </div>
               <div className="flex items-center justify-between gap-4">
-                <dt className="font-medium text-zinc-800">Instalada em</dt>
-                <dd>{connectedStore.installedAt.toLocaleString("pt-BR")}</dd>
+                <dt className="font-medium text-zinc-800">Registrada em</dt>
+                <dd>{connectedStore.createdAt.toLocaleString("pt-BR")}</dd>
               </div>
             </dl>
             <Link

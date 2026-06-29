@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { StoreStatus } from "@/lib/generated/prisma/client";
 import { getEnv } from "@/src/lib/env";
 import {
   encryptAccessTokenForStorage,
@@ -86,8 +85,6 @@ export async function GET(request: NextRequest) {
     return jsonError("Unable to secure Nuvemshop access token.", 500);
   }
 
-  const installedAt = new Date();
-
   try {
     await prisma.store.upsert({
       where: {
@@ -96,16 +93,10 @@ export async function GET(request: NextRequest) {
       create: {
         nuvemshopStoreId: token.storeId,
         accessTokenCiphertext,
-        scopes: token.scopes,
-        status: StoreStatus.CONNECTED,
-        installedAt,
         disconnectedAt: null,
       },
       update: {
         accessTokenCiphertext,
-        scopes: token.scopes,
-        status: StoreStatus.CONNECTED,
-        installedAt,
         disconnectedAt: null,
       },
     });
