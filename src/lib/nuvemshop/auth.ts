@@ -130,6 +130,7 @@ export async function exchangeCodeForToken(code: string): Promise<NuvemshopToken
       client_id: env.NUVEMSHOP_CLIENT_ID,
       client_secret: env.NUVEMSHOP_CLIENT_SECRET,
       code,
+      redirect_uri: getNuvemshopCallbackUrl(),
     }),
     cache: "no-store",
   });
