@@ -5,6 +5,12 @@ import { prisma } from "@/src/lib/prisma";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
+const publicOfferHeaders = {
+  "Access-Control-Allow-Headers": "Content-Type",
+  "Access-Control-Allow-Methods": "GET, OPTIONS",
+  "Access-Control-Allow-Origin": "*",
+};
+
 const connectedStoreWhere = {
   AND: [
     {
@@ -34,8 +40,15 @@ function readQueryValue(request: NextRequest, key: string): string | null {
   return request.nextUrl.searchParams.get(key)?.trim() || null;
 }
 
+function publicJson(body: unknown, status = 200) {
+  return NextResponse.json(body, {
+    status,
+    headers: publicOfferHeaders,
+  });
+}
+
 function offerNotFound() {
-  return NextResponse.json({ offer: null });
+  return publicJson({ offer: null });
 }
 
 async function findPublicStore(providerStoreId: string | null): Promise<PublicStoreLookup> {
@@ -78,14 +91,14 @@ export async function GET(request: NextRequest) {
   const productId = readQueryValue(request, "productId");
 
   if (!productId) {
-    return NextResponse.json({ error: "productId is required." }, { status: 400 });
+    return publicJson({ error: "productId is required." }, 400);
   }
 
   try {
     const store = await findPublicStore(readQueryValue(request, "storeId"));
 
     if (store.reason === "store_id_required") {
-      return NextResponse.json({ error: "storeId is required when multiple stores are connected." }, { status: 400 });
+      return publicJson({ error: "storeId is required when multiple stores are connected." }, 400);
     }
 
     if (!store.storeId) {
@@ -115,7 +128,7 @@ export async function GET(request: NextRequest) {
       return offerNotFound();
     }
 
-    return NextResponse.json({
+    return publicJson({
       offer: {
         principalProductId: productId,
         suggestedProduct: {
@@ -129,6 +142,13 @@ export async function GET(request: NextRequest) {
       name: error instanceof Error ? error.name : "unknown",
     });
 
-    return NextResponse.json({ error: "Unable to load offer." }, { status: 500 });
+    return publicJson({ error: "Unable to load offer." }, 500);
   }
+}
+
+export async function OPTIONS() {
+  return new Response(null, {
+    status: 204,
+    headers: publicOfferHeaders,
+  });
 }
