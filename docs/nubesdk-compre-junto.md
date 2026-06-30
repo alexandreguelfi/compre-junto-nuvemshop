@@ -3,6 +3,19 @@
 Esta é a primeira implementação paralela do widget Compre Junto para storefront via NubeSDK.
 O widget legado em `/widget/compre-junto.js` continua existindo como fallback/demo.
 
+## Modo diagnóstico temporário
+
+O bundle atual está em modo diagnóstico de renderização fixa. Ele não consulta API, não depende de
+`productId`, não depende de `storeId` e não renderiza oferta real.
+
+Texto renderizado:
+
+- "Compre Junto NubeSDK ativo"
+- "Renderização de teste"
+
+Objetivo: confirmar se o Partner Portal, o formato do bundle e os slots do NubeSDK estão funcionando
+antes de reativar a lógica dinâmica de oferta.
+
 ## Build
 
 ```bash
@@ -25,10 +38,14 @@ O comando principal `npm run build` também executa `npm run build:nube` antes d
 
 ## Slot usado
 
-Slot: `after_product_detail_add_to_cart`
+Slot principal: `after_product_detail_add_to_cart`
+
+Slot fallback de diagnóstico: `after_product_detail_price`
 
 Motivo: o bloco "Compre junto" aparece na página de produto logo após a área principal de compra,
 perto do botão de adicionar ao carrinho, sem depender de seletores do tema ou manipulação direta de DOM.
+
+O slot fallback ajuda a diferenciar problema de slot específico de problema de bundle/configuração.
 
 ## Contexto usado
 
