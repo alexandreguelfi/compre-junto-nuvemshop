@@ -1,21 +1,37 @@
 # NubeSDK Compre Junto
 
-Esta é a primeira implementação paralela do widget Compre Junto para storefront via NubeSDK.
-O widget legado em `/widget/compre-junto.js` continua existindo como fallback/demo.
+Esta é a implementação paralela do widget Compre Junto para storefront via NubeSDK.
+O widget legado em `/widget/compre-junto.js` continua existindo apenas como fallback/demo.
 
-## Modo dinâmico com diagnóstico
+## Modo diagnóstico fixo do #7880
 
-O bundle atual detecta página de produto, lê `productId` e `storeId` pelo state do NubeSDK, consulta
-o endpoint público de ofertas e renderiza somente quando existe oferta ativa.
+O bundle atual está temporariamente em modo diagnóstico fixo para isolar a execução do script
+`#7880 Compre Junto NubeSDK` sem depender do script legado `#7884`.
 
-Também registra logs seguros no console do ambiente NubeSDK para diagnosticar:
+Nesta versão, o entrypoint NubeSDK não lê state, não consulta API e não depende de oferta cadastrada.
+Ele apenas tenta renderizar um bloco fixo nos slots de produto.
 
-- script iniciado;
-- tipo de página detectado;
-- `productId` e `storeId`;
-- endpoint chamado;
-- oferta encontrada ou `null`;
-- erro de fetch ou exceção capturada.
+Texto renderizado:
+
+```text
+Compre Junto NubeSDK #7880 ativo
+Teste isolado sem script legado
+```
+
+Logs seguros esperados no console do ambiente NubeSDK:
+
+- `Compre Junto NubeSDK #7880 bootstrap`;
+- `Tentando renderizar slot`;
+- nome do slot usado;
+- `Renderização diagnóstica enviada`.
+
+Se esse bloco aparecer com somente o `#7880` ativo no Partner Portal, o bundle, o export,
+o evento de carregamento e ao menos um slot estão funcionando. Nesse caso, o próximo passo é
+reativar a lógica dinâmica gradualmente: state, página de produto, `productId`, `storeId`, fetch
+e renderização da oferta.
+
+Se o bloco não aparecer com somente o `#7880` ativo, o problema provavelmente está em configuração
+do Partner Portal, evento de carregamento, URL do bundle, formato aceito para NubeSDK ou slot.
 
 ## Build
 
@@ -37,76 +53,60 @@ https://compre-junto-nuvemshop-production.up.railway.app/nube/compre-junto.js
 
 O comando principal `npm run build` também executa `npm run build:nube` antes do `next build`.
 
-## Slot usado
+## Entry Point
 
-Slot: `after_product_detail_add_to_cart`
+O entrypoint exporta:
 
-Motivo: o bloco "Compre junto" aparece na página de produto logo após a área principal de compra,
-perto do botão de adicionar ao carrinho, sem depender de seletores do tema ou manipulação direta de DOM.
-
-O bundle também limpa o antigo slot diagnóstico `after_product_detail_price`, usado apenas no teste de
-renderização fixa.
-
-## Contexto usado
-
-O entrypoint NubeSDK lê:
-
-- `state.location.page.type` para confirmar página de produto;
-- `state.location.page.data.product.id` como `productId`;
-- `state.store.id` como `storeId`.
-
-Com esses dados, consulta:
-
-```text
-https://compre-junto-nuvemshop-production.up.railway.app/api/public/offers?productId=...&storeId=...
+```ts
+export function App(nube: NubeSDK)
 ```
 
-Se a resposta for `offer:null`, o slot é limpo e nada é renderizado.
+Esse formato segue o template oficial usado para gerar bundle NubeSDK com `tsup` em ESM.
 
-Se houver oferta, o slot renderiza:
+## Slots usados no diagnóstico
 
-- título: "Compre junto";
-- texto: "Combine este produto com:";
-- nome do produto sugerido;
-- botão "Ver produto sugerido".
+O bundle tenta renderizar temporariamente em três slots:
 
-## Navegação
+- `after_product_detail_add_to_cart`;
+- `after_product_detail_price`;
+- `before_product_detail_add_to_cart`.
 
-O NubeSDK expõe `browser.navigate` para rotas relativas. Por isso o endpoint público também retorna:
+Motivo: testar mais de uma área de produto sem usar seletores do tema, DOM direto, `window`,
+`document`, `querySelector`, `innerHTML` ou jQuery.
 
-```json
-{
-  "suggestedProduct": {
-    "id": "353199744",
-    "name": "Produto C",
-    "url": "https://loja.exemplo/produtos/produto-c/",
-    "path": "/produtos/produto-c/"
-  }
-}
-```
+## Como testar no Partner Portal
 
-Quando `path` existe, o botão chama `nube.getBrowserAPIs().navigate(path)`.
-Quando `path` não existe, o botão fica desabilitado de forma segura.
-
-## Como testar com NubeSDK DevTools
-
-1. Rode o app principal, se quiser testar contra API local.
-2. Rode `npm run build:nube` para gerar o bundle.
-3. Sirva o arquivo `public/nube/compre-junto.js` em uma URL acessível pelo navegador, por exemplo
-   usando um servidor estático com CORS.
-4. Abra o NubeSDK DevTools/Local Mode no ambiente da Nuvemshop.
-5. Informe a URL do bundle local ou de produção.
-6. Acesse uma página de produto que tenha oferta ativa.
-
-Para teste em produção, use diretamente:
+1. Confirme que o script legado `#7884 Compre Junto Widget` está desativado.
+2. Confirme que somente o `#7880 Compre Junto NubeSDK` está ativo.
+3. No `#7880`, use a URL de produção do bundle:
 
 ```text
 https://compre-junto-nuvemshop-production.up.railway.app/nube/compre-junto.js
 ```
 
+4. Publique/instale a nova versão do script no Partner Portal.
+5. Acesse uma página de produto e force recarregamento completo.
+6. Procure pelo texto:
+
+```text
+Compre Junto NubeSDK #7880 ativo
+```
+
+## Próximo passo depois do diagnóstico
+
+Depois que o bloco fixo aparecer usando apenas o `#7880`, reativar a versão dinâmica em etapas:
+
+1. ler o state do NubeSDK;
+2. confirmar página de produto;
+3. detectar `productId`;
+4. detectar `storeId`;
+5. chamar `/api/public/offers`;
+6. renderizar a oferta real;
+7. navegar para `suggestedProduct.path`.
+
 ## Pendências
 
-- Validar visualmente o slot em temas reais com NubeSDK DevTools.
-- Confirmar no Partner Portal a configuração de app que usa NubeSDK.
-- Confirmar se a publicação NubeSDK substitui o Script API legado ou se ambos podem conviver durante homologação.
-- Evoluir o CTA para add-to-cart oficial via NubeSDK em etapa futura.
+- Confirmar visualmente qual slot aparece no tema real.
+- Confirmar no Partner Portal se o evento `onfirstinteraction` é suficiente para o teste ou se
+  vale criar uma versão `onload` do NubeSDK.
+- Reativar a lógica dinâmica somente depois que o diagnóstico fixo provar execução isolada do `#7880`.
