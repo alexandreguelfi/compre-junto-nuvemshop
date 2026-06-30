@@ -1,9 +1,14 @@
 import { type NextRequest, NextResponse } from "next/server";
 
+import { decryptAccessTokenFromStorage } from "@/src/lib/nuvemshop/auth";
 import { prisma } from "@/src/lib/prisma";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+
+const NUVEMSHOP_API_VERSION = "2025-03";
+const NUVEMSHOP_API_BASE_URL = `https://api.tiendanube.com/${NUVEMSHOP_API_VERSION}`;
+const USER_AGENT = "CompreJuntoNuvemshop atendimento@casasmartnest.com.br";
 
 const publicOfferHeaders = {
   "Access-Control-Allow-Headers": "Content-Type",
@@ -28,6 +33,8 @@ const connectedStoreWhere = {
 
 type PublicStoreLookup =
   | {
+      accessTokenCiphertext: string;
+      providerStoreId: string;
       reason: "ok";
       storeId: string;
     }
@@ -59,11 +66,20 @@ async function findPublicStore(providerStoreId: string | null): Promise<PublicSt
         nuvemshopStoreId: providerStoreId,
       },
       select: {
+        accessTokenCiphertext: true,
         id: true,
+        nuvemshopStoreId: true,
       },
     });
 
-    return store ? { reason: "ok", storeId: store.id } : { reason: "no_connected_store", storeId: null };
+    return store && store.accessTokenCiphertext
+      ? {
+          accessTokenCiphertext: store.accessTokenCiphertext,
+          providerStoreId: store.nuvemshopStoreId,
+          reason: "ok",
+          storeId: store.id,
+        }
+      : { reason: "no_connected_store", storeId: null };
   }
 
   const stores = await prisma.store.findMany({
@@ -72,19 +88,149 @@ async function findPublicStore(providerStoreId: string | null): Promise<PublicSt
       updatedAt: "desc",
     },
     select: {
+      accessTokenCiphertext: true,
       id: true,
+      nuvemshopStoreId: true,
     },
     take: 2,
   });
 
-  if (stores.length === 1) {
-    return { reason: "ok", storeId: stores[0].id };
+  if (stores.length === 1 && stores[0].accessTokenCiphertext) {
+    return {
+      accessTokenCiphertext: stores[0].accessTokenCiphertext,
+      providerStoreId: stores[0].nuvemshopStoreId,
+      reason: "ok",
+      storeId: stores[0].id,
+    };
   }
 
   return {
     reason: stores.length === 0 ? "no_connected_store" : "store_id_required",
     storeId: null,
   };
+}
+
+function readLocalizedValue(value: unknown): string | null {
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const localized = value as Record<string, unknown>;
+  const preferred = localized.pt ?? localized["pt-BR"] ?? localized.en;
+
+  if (typeof preferred === "string" && preferred.trim()) {
+    return preferred.trim();
+  }
+
+  for (const item of Object.values(localized)) {
+    if (typeof item === "string" && item.trim()) {
+      return item.trim();
+    }
+  }
+
+  return null;
+}
+
+function normalizePublicUrl(value: unknown): string | null {
+  if (typeof value !== "string" || !value.trim()) {
+    return null;
+  }
+
+  try {
+    const url = new URL(value.trim());
+
+    return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+async function readJsonObject(response: Response): Promise<Record<string, unknown> | null> {
+  try {
+    const data = (await response.json()) as unknown;
+
+    return data && typeof data === "object" && !Array.isArray(data) ? (data as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function getSuggestedProductUrl(args: {
+  accessTokenCiphertext: string;
+  productId: string;
+  providerStoreId: string;
+}): Promise<string | null> {
+  try {
+    const accessToken = decryptAccessTokenFromStorage(args.accessTokenCiphertext);
+    const baseUrl = `${NUVEMSHOP_API_BASE_URL}/${encodeURIComponent(args.providerStoreId)}`;
+    const headers = {
+      Accept: "application/json",
+      Authorization: `Bearer ${accessToken}`,
+      "User-Agent": USER_AGENT,
+    };
+    const productResponse = await fetch(`${baseUrl}/products/${encodeURIComponent(args.productId)}`, {
+      headers,
+      cache: "no-store",
+    });
+
+    if (!productResponse.ok) {
+      console.warn("Nuvemshop product lookup failed.", {
+        productId: args.productId,
+        providerStoreId: args.providerStoreId,
+        status: productResponse.status,
+      });
+
+      return null;
+    }
+
+    const product = await readJsonObject(productResponse);
+    const canonicalUrl = normalizePublicUrl(product?.canonical_url);
+
+    if (canonicalUrl) {
+      return canonicalUrl;
+    }
+
+    const handle = readLocalizedValue(product?.handle);
+
+    if (!handle) {
+      return null;
+    }
+
+    const storeResponse = await fetch(`${baseUrl}/store`, {
+      headers,
+      cache: "no-store",
+    });
+
+    if (!storeResponse.ok) {
+      console.warn("Nuvemshop store lookup failed for product URL fallback.", {
+        providerStoreId: args.providerStoreId,
+        status: storeResponse.status,
+      });
+
+      return null;
+    }
+
+    const store = await readJsonObject(storeResponse);
+    const originalDomain = readLocalizedValue(store?.original_domain);
+
+    if (!originalDomain) {
+      return null;
+    }
+
+    const storeOrigin = originalDomain.startsWith("http") ? originalDomain : `https://${originalDomain}`;
+
+    return normalizePublicUrl(`${storeOrigin.replace(/\/+$/, "")}/produtos/${handle}/`);
+  } catch (error) {
+    console.warn("Suggested product URL lookup failed.", {
+      name: error instanceof Error ? error.name : "unknown",
+    });
+
+    return null;
+  }
 }
 
 export async function GET(request: NextRequest) {
@@ -128,12 +274,19 @@ export async function GET(request: NextRequest) {
       return offerNotFound();
     }
 
+    const suggestedProductUrl = await getSuggestedProductUrl({
+      accessTokenCiphertext: store.accessTokenCiphertext,
+      productId: offer.suggestedProductId,
+      providerStoreId: store.providerStoreId,
+    });
+
     return publicJson({
       offer: {
         principalProductId: productId,
         suggestedProduct: {
           id: offer.suggestedProductId,
           name: offer.suggestedProductName,
+          url: suggestedProductUrl,
         },
       },
     });

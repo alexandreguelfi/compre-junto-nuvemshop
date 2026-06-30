@@ -156,7 +156,15 @@ const widgetScript = String.raw`
     button.type = "button";
     button.textContent = "Ver produto sugerido";
     button.setAttribute("data-suggested-product-id", offer.suggestedProduct.id);
+    if (offer.suggestedProduct.url) {
+      button.setAttribute("data-suggested-product-url", offer.suggestedProduct.url);
+    }
     button.addEventListener("click", function () {
+      if (offer.suggestedProduct.url) {
+        window.location.href = offer.suggestedProduct.url;
+        return;
+      }
+
       window.dispatchEvent(
         new CustomEvent("compre-junto:view-suggested-product", {
           detail: {
