@@ -36,6 +36,13 @@ function logSafeCallbackFailure(stage: string, details: Record<string, string | 
   });
 }
 
+function logSafeCallbackDiagnostic(stage: string, details: Record<string, string | number | boolean | null> = {}) {
+  console.info("Nuvemshop OAuth callback diagnostic.", {
+    stage,
+    ...details,
+  });
+}
+
 export async function GET(request: NextRequest) {
   const code = request.nextUrl.searchParams.get("code");
   const state = request.nextUrl.searchParams.get("state");
@@ -86,7 +93,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    await prisma.store.upsert({
+    const savedStore = await prisma.store.upsert({
       where: {
         nuvemshopStoreId: token.storeId,
       },
@@ -94,17 +101,33 @@ export async function GET(request: NextRequest) {
         nuvemshopStoreId: token.storeId,
         accessTokenCiphertext,
         disconnectedAt: null,
+        scopes: token.scopes,
       },
       update: {
         accessTokenCiphertext,
         disconnectedAt: null,
+        scopes: token.scopes,
+      },
+      select: {
+        id: true,
+        nuvemshopStoreId: true,
+        updatedAt: true,
       },
     });
-  } catch {
+
+    logSafeCallbackDiagnostic("store_upsert_success", {
+      storeId: savedStore.id,
+      providerStoreId: savedStore.nuvemshopStoreId,
+      updatedAt: savedStore.updatedAt.toISOString(),
+      hasAccessToken: true,
+      scopesCount: token.scopes.length,
+    });
+  } catch (error) {
     logSafeCallbackFailure("store_upsert", {
       storeId: token.storeId,
       hasAccessToken: true,
       scopesCount: token.scopes.length,
+      ...getSafeAuthErrorDetails(error),
     });
 
     return jsonError("Unable to save Nuvemshop store installation.", 500);

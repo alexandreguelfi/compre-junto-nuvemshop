@@ -41,7 +41,7 @@ BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM pg_constraint WHERE conname = 'CrossSellOffer_storeId_fkey'
     ) THEN
-        ALTER TABLE "CrossSellOffer" ADD CONSTRAINT "CrossSellOffer_storeId_fkey" FOREIGN KEY ("storeId") REFERENCES "stores"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+        ALTER TABLE "CrossSellOffer" ADD CONSTRAINT "CrossSellOffer_storeId_fkey" FOREIGN KEY ("storeId") REFERENCES "Store"("id") ON DELETE CASCADE ON UPDATE CASCADE;
     END IF;
 END $$;
 

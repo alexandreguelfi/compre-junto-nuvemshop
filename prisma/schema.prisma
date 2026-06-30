@@ -47,12 +47,16 @@ enum AuditActorType {
 
 model Store {
   id                    String           @id @default(cuid())
-  nuvemshopStoreId      String?          @unique @map("nuvemshop_id")
+  nuvemshopStoreId      String           @unique
   name                  String?
-  accessTokenCiphertext String?          @map("access_token_encrypted")
-  createdAt             DateTime         @default(now()) @map("created_at")
-  updatedAt             DateTime         @updatedAt @map("updated_at")
-  disconnectedAt        DateTime?        @map("disconnected_at")
+  email                 String?
+  status                StoreStatus      @default(CONNECTED)
+  accessTokenCiphertext String?          @db.Text
+  scopes                String[]         @default([])
+  installedAt           DateTime         @default(now())
+  disconnectedAt        DateTime?
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
   products              Product[]
   variants              ProductVariant[]
   bundles               Bundle[]
@@ -60,7 +64,7 @@ model Store {
   webhookEvents         WebhookEvent[]
   auditLogs             AuditLog[]
 
-  @@map("stores")
+  @@index([status])
 }
 
 model Product {
