@@ -16,6 +16,20 @@ function readRequiredField(formData: FormData, fieldName: string): string {
   return value.trim();
 }
 
+function readForwardedHeader(request: Request, headerName: string): string | null {
+  return request.headers.get(headerName)?.split(",")[0]?.trim() || null;
+}
+
+function getRequestOrigin(request: Request): string {
+  const requestUrl = new URL(request.url);
+  const forwardedHost = readForwardedHeader(request, "x-forwarded-host");
+  const forwardedProto = readForwardedHeader(request, "x-forwarded-proto");
+  const host = forwardedHost ?? request.headers.get("host") ?? requestUrl.host;
+  const protocol = forwardedProto ?? requestUrl.protocol.replace(":", "");
+
+  return `${protocol}://${host}`;
+}
+
 export async function POST(request: Request) {
   const store = await getConnectedStore();
 
@@ -41,7 +55,7 @@ export async function POST(request: Request) {
       },
     });
 
-    return NextResponse.redirect(new URL("/admin/ofertas", request.url), { status: 303 });
+    return NextResponse.redirect(new URL("/admin/ofertas", getRequestOrigin(request)), { status: 303 });
   } catch {
     return NextResponse.json({ error: "Nao foi possivel salvar a oferta." }, { status: 400 });
   }
