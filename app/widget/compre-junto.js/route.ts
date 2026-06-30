@@ -9,18 +9,123 @@ const widgetScript = String.raw`
     return scripts[scripts.length - 1] || null;
   }
 
+  function getDataValue(script, name) {
+    if (!script) {
+      return "";
+    }
+
+    if (script.dataset && script.dataset[name]) {
+      return script.dataset[name];
+    }
+
+    return script.getAttribute("data-" + name.replace(/[A-Z]/g, "-$&").toLowerCase()) || "";
+  }
+
+  function cleanId(value) {
+    if (typeof value === "number" && isFinite(value)) {
+      return String(value);
+    }
+
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+
+    return "";
+  }
+
+  function readKnownId(source, keys) {
+    var index;
+    var value;
+
+    if (!source || typeof source !== "object") {
+      return cleanId(source);
+    }
+
+    for (index = 0; index < keys.length; index += 1) {
+      value = cleanId(source[keys[index]]);
+
+      if (value) {
+        return value;
+      }
+    }
+
+    return "";
+  }
+
+  function readScriptQuery(script, key) {
+    if (!script || !script.src) {
+      return "";
+    }
+
+    try {
+      return cleanId(new URL(script.src, window.location.href).searchParams.get(key));
+    } catch (error) {
+      return "";
+    }
+  }
+
+  function getLs() {
+    return window.LS && typeof window.LS === "object" ? window.LS : null;
+  }
+
+  function detectProductId(script) {
+    var dataProductId = cleanId(getDataValue(script, "productId"));
+    var ls = getLs();
+
+    if (dataProductId) {
+      return dataProductId;
+    }
+
+    return ls
+      ? readKnownId(ls.product, ["id", "productId", "product_id", "id_product", "nuvemshopProductId"])
+      : "";
+  }
+
+  function detectStoreId(script) {
+    var dataStoreId = cleanId(getDataValue(script, "storeId"));
+    var scriptStoreId;
+    var ls = getLs();
+
+    if (dataStoreId) {
+      return dataStoreId;
+    }
+
+    scriptStoreId = readScriptQuery(script, "store");
+
+    if (scriptStoreId) {
+      return scriptStoreId;
+    }
+
+    return ls ? readKnownId(ls.store, ["id", "storeId", "store_id", "id_store", "nuvemshopStoreId"]) : "";
+  }
+
+  function insertAfter(target, element) {
+    if (!target || !target.parentNode) {
+      return false;
+    }
+
+    target.parentNode.insertBefore(element, target.nextSibling);
+    return true;
+  }
+
   function findContainer(script) {
     var container =
       document.getElementById("compre-junto-widget") || document.querySelector("[data-compre-junto-widget]");
+    var productArea;
 
     if (container) {
       return container;
     }
 
     container = document.createElement("div");
+    productArea = document.querySelector('[data-store^="product-info"], [data-store^="product-form"]');
 
-    if (script && script.parentNode) {
-      script.parentNode.insertBefore(container, script.nextSibling);
+    if (insertAfter(productArea, container)) {
+      return container;
+    }
+
+    if (insertAfter(script, container)) {
+      return container;
     } else if (document.body) {
       document.body.appendChild(container);
     }
@@ -87,8 +192,8 @@ const widgetScript = String.raw`
   }
 
   var script = getCurrentScript();
-  var productId = script && script.dataset ? script.dataset.productId : "";
-  var storeId = script && script.dataset ? script.dataset.storeId : "";
+  var productId = detectProductId(script);
+  var storeId = detectStoreId(script);
 
   if (!productId) {
     return;
