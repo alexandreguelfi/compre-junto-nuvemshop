@@ -1,6 +1,6 @@
-import { STOREFRONT_UI_SLOT, type NubeSDK } from "@tiendanube/nube-sdk-types";
+import type { NubeSDK } from "@tiendanube/nube-sdk-types";
 
-const PERF_SAFE_SLOT = STOREFRONT_UI_SLOT.AFTER_PRODUCT_DETAIL_ADD_TO_CART;
+const PERF_SAFE_SLOT = "after_product_detail_add_to_cart";
 const ID_PREFIX = "compre-junto-perf-safe";
 
 function createPerfSafeBlock() {
