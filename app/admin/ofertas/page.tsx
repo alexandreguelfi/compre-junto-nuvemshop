@@ -6,6 +6,12 @@ import { getConnectedStore } from "@/src/lib/stores/current-store";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
+type OffersPageProps = {
+  searchParams?: Promise<{
+    created?: string | string[] | undefined;
+  }>;
+};
+
 async function getOffers(storeId: string) {
   return prisma.crossSellOffer.findMany({
     where: {
@@ -29,7 +35,13 @@ async function getOffers(storeId: string) {
   });
 }
 
-export default async function OffersPage() {
+function hasCreatedFeedback(created: string | string[] | undefined) {
+  return created === "1" || (Array.isArray(created) && created.includes("1"));
+}
+
+export default async function OffersPage({ searchParams }: OffersPageProps) {
+  const params = searchParams ? await searchParams : {};
+  const showCreatedFeedback = hasCreatedFeedback(params.created);
   const store = await getConnectedStore();
   const offers = store ? await getOffers(store.id) : [];
 
@@ -50,6 +62,15 @@ export default async function OffersPage() {
           Criar oferta
         </Link>
       </header>
+
+      {showCreatedFeedback ? (
+        <section
+          role="status"
+          className="mt-6 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800"
+        >
+          Oferta criada com sucesso.
+        </section>
+      ) : null}
 
       {!store ? (
         <section className="mt-10 rounded-md border border-zinc-200 bg-white p-6">

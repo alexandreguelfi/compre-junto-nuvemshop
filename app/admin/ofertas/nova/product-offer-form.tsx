@@ -1,13 +1,18 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { type FormEvent, useMemo, useState } from "react";
 
 import type { NuvemshopAdminProduct } from "@/src/lib/nuvemshop/products";
 
 type ProductOfferFormProps = {
   products: NuvemshopAdminProduct[];
   productsLoadFailed: boolean;
+};
+
+type FormMessage = {
+  kind: "error" | "success";
+  text: string;
 };
 
 function findProduct(products: NuvemshopAdminProduct[], productId: string) {
@@ -48,8 +53,14 @@ export function ProductOfferForm({ products, productsLoadFailed }: ProductOfferF
   const [suggestedProductName, setSuggestedProductName] = useState("");
   const [triggerProductId, setTriggerProductId] = useState("");
   const [triggerProductName, setTriggerProductName] = useState("");
+  const [message, setMessage] = useState<FormMessage | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const hasProducts = products.length > 0;
+  const hasSameProduct =
+    Boolean(suggestedProductId.trim()) &&
+    Boolean(triggerProductId.trim()) &&
+    suggestedProductId.trim() === triggerProductId.trim();
   const productsStatusText = useMemo(() => {
     if (productsLoadFailed) {
       return "Nao foi possivel carregar os produtos agora. Os campos manuais seguem disponiveis.";
@@ -62,9 +73,34 @@ export function ProductOfferForm({ products, productsLoadFailed }: ProductOfferF
     return `${products.length} produtos carregados da Nuvemshop.`;
   }, [hasProducts, products.length, productsLoadFailed]);
 
+  function getClientValidationError() {
+    if (!triggerProductId.trim()) {
+      return "Informe o ID do produto principal.";
+    }
+
+    if (!triggerProductName.trim()) {
+      return "Informe o nome do produto principal.";
+    }
+
+    if (!suggestedProductId.trim()) {
+      return "Informe o ID do produto sugerido.";
+    }
+
+    if (!suggestedProductName.trim()) {
+      return "Informe o nome do produto sugerido.";
+    }
+
+    if (hasSameProduct) {
+      return "O produto principal e o produto sugerido devem ser diferentes.";
+    }
+
+    return null;
+  }
+
   function selectSuggestedProduct(productId: string) {
     const product = findProduct(products, productId);
 
+    setMessage(null);
     setSuggestedProductId(product?.id ?? "");
     setSuggestedProductName(product?.name ?? "");
   }
@@ -72,12 +108,74 @@ export function ProductOfferForm({ products, productsLoadFailed }: ProductOfferF
   function selectTriggerProduct(productId: string) {
     const product = findProduct(products, productId);
 
+    setMessage(null);
     setTriggerProductId(product?.id ?? "");
     setTriggerProductName(product?.name ?? "");
   }
 
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const validationError = getClientValidationError();
+
+    if (validationError) {
+      setMessage({ kind: "error", text: validationError });
+      return;
+    }
+
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+
+    setIsSubmitting(true);
+    setMessage({ kind: "success", text: "Validacoes ok. Salvando oferta..." });
+
+    try {
+      const response = await fetch(form.action, {
+        body: formData,
+        method: "POST",
+      });
+
+      if (response.redirected) {
+        setMessage({ kind: "success", text: "Oferta salva. Redirecionando..." });
+        window.location.href = response.url;
+        return;
+      }
+
+      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+
+      if (!response.ok) {
+        setMessage({
+          kind: "error",
+          text: payload?.error ?? "Nao foi possivel salvar a oferta.",
+        });
+        setIsSubmitting(false);
+        return;
+      }
+
+      setMessage({ kind: "success", text: "Oferta salva. Redirecionando..." });
+      window.location.href = "/admin/ofertas?created=1";
+    } catch {
+      setMessage({ kind: "error", text: "Nao foi possivel salvar a oferta agora. Tente novamente." });
+      setIsSubmitting(false);
+    }
+  }
+
   return (
-    <form action="/api/admin/ofertas" method="post" className="mt-8 grid gap-6">
+    <form action="/api/admin/ofertas" method="post" noValidate onSubmit={handleSubmit} className="mt-8 grid gap-6">
+      {message ? (
+        <div
+          aria-live="polite"
+          role={message.kind === "error" ? "alert" : "status"}
+          className={
+            message.kind === "error"
+              ? "rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800"
+              : "rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800"
+          }
+        >
+          {message.text}
+        </div>
+      ) : null}
+
       <section className="grid gap-5 rounded-md border border-zinc-200 bg-white p-6">
         <div>
           <h2 className="text-lg font-semibold">Produto sugerido</h2>
@@ -90,7 +188,10 @@ export function ProductOfferForm({ products, productsLoadFailed }: ProductOfferF
           ID do produto sugerido
           <input
             name="suggestedProductId"
-            onChange={(event) => setSuggestedProductId(event.target.value)}
+            onChange={(event) => {
+              setMessage(null);
+              setSuggestedProductId(event.target.value);
+            }}
             required
             value={suggestedProductId}
             className="h-10 rounded-md border border-zinc-300 px-3 text-sm outline-none focus:border-zinc-900"
@@ -100,7 +201,10 @@ export function ProductOfferForm({ products, productsLoadFailed }: ProductOfferF
           Nome do produto sugerido
           <input
             name="suggestedProductName"
-            onChange={(event) => setSuggestedProductName(event.target.value)}
+            onChange={(event) => {
+              setMessage(null);
+              setSuggestedProductName(event.target.value);
+            }}
             required
             value={suggestedProductName}
             className="h-10 rounded-md border border-zinc-300 px-3 text-sm outline-none focus:border-zinc-900"
@@ -122,7 +226,10 @@ export function ProductOfferForm({ products, productsLoadFailed }: ProductOfferF
           ID do produto principal
           <input
             name="triggerProductId"
-            onChange={(event) => setTriggerProductId(event.target.value)}
+            onChange={(event) => {
+              setMessage(null);
+              setTriggerProductId(event.target.value);
+            }}
             required
             value={triggerProductId}
             className="h-10 rounded-md border border-zinc-300 px-3 text-sm outline-none focus:border-zinc-900"
@@ -132,12 +239,20 @@ export function ProductOfferForm({ products, productsLoadFailed }: ProductOfferF
           Nome do produto principal
           <input
             name="triggerProductName"
-            onChange={(event) => setTriggerProductName(event.target.value)}
+            onChange={(event) => {
+              setMessage(null);
+              setTriggerProductName(event.target.value);
+            }}
             required
             value={triggerProductName}
             className="h-10 rounded-md border border-zinc-300 px-3 text-sm outline-none focus:border-zinc-900"
           />
         </label>
+        {hasSameProduct ? (
+          <p role="alert" className="text-sm font-medium text-red-700">
+            O produto principal e o produto sugerido devem ser diferentes.
+          </p>
+        ) : null}
       </section>
 
       <section className="grid gap-3 rounded-md border border-zinc-200 bg-white p-6">
@@ -163,10 +278,11 @@ export function ProductOfferForm({ products, productsLoadFailed }: ProductOfferF
           Cancelar
         </Link>
         <button
+          disabled={isSubmitting}
           type="submit"
-          className="inline-flex h-10 items-center justify-center rounded-md bg-zinc-950 px-4 text-sm font-medium text-white transition hover:bg-zinc-800"
+          className="inline-flex h-10 items-center justify-center rounded-md bg-zinc-950 px-4 text-sm font-medium text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-zinc-400"
         >
-          Salvar oferta
+          {isSubmitting ? "Salvando..." : "Salvar oferta"}
         </button>
       </div>
     </form>
