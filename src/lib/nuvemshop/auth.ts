@@ -209,3 +209,23 @@ export function encryptAccessTokenForStorage(accessToken: string): string {
     ciphertext.toString("base64url"),
   ].join(":");
 }
+
+export function decryptAccessTokenFromStorage(accessTokenCiphertext: string): string {
+  const [version, iv, authTag, ciphertext] = accessTokenCiphertext.split(":");
+
+  if (version !== "v1" || !iv || !authTag || !ciphertext) {
+    throw new NuvemshopAuthError("Stored Nuvemshop access token format is invalid", {
+      stage: "token_decryption",
+    });
+  }
+
+  const key = crypto.createHash("sha256").update(getEnv().COMPRE_JUNTO_ADMIN_SECRET).digest();
+  const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(iv, "base64url"));
+
+  decipher.setAuthTag(Buffer.from(authTag, "base64url"));
+
+  return Buffer.concat([
+    decipher.update(Buffer.from(ciphertext, "base64url")),
+    decipher.final(),
+  ]).toString("utf8");
+}
