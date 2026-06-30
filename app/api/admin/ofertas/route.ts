@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { resolveStoreCommercialAccess } from "@/src/lib/billing/commercial-status";
 import { prisma } from "@/src/lib/prisma";
 import { getConnectedStore } from "@/src/lib/stores/current-store";
 
@@ -110,6 +111,12 @@ export async function POST(request: Request) {
 
   if (!store?.id) {
     return jsonError(OFFER_FORM_MESSAGES.missingStore, 401);
+  }
+
+  const commercialAccess = resolveStoreCommercialAccess(store);
+
+  if (!commercialAccess.canCreateOffer) {
+    return jsonError(commercialAccess.message, 403);
   }
 
   let input: OfferFormInput;

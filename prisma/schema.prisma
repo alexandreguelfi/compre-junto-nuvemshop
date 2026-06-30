@@ -13,6 +13,13 @@ enum StoreStatus {
   SUSPENDED
 }
 
+enum CommercialStatus {
+  TRIALING
+  ACTIVE
+  EXPIRED
+  CANCELED
+}
+
 enum BundleStatus {
   DRAFT
   ACTIVE
@@ -51,9 +58,12 @@ model Store {
   name                  String?
   email                 String?
   status                StoreStatus      @default(CONNECTED)
+  commercialStatus      CommercialStatus @default(TRIALING)
   accessTokenCiphertext String?          @db.Text
   scopes                String[]         @default([])
   installedAt           DateTime         @default(now())
+  trialStartedAt        DateTime?
+  trialEndsAt           DateTime?
   disconnectedAt        DateTime?
   createdAt             DateTime         @default(now())
   updatedAt             DateTime         @updatedAt
@@ -65,6 +75,8 @@ model Store {
   auditLogs             AuditLog[]
 
   @@index([status])
+  @@index([commercialStatus])
+  @@index([trialEndsAt])
 }
 
 model Product {

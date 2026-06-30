@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { COMPRE_JUNTO_PLAN } from "@/src/lib/billing/commercial-status";
 import { getEnv } from "@/src/lib/env";
 import {
   encryptAccessTokenForStorage,
@@ -41,6 +42,10 @@ function logSafeCallbackDiagnostic(stage: string, details: Record<string, string
     stage,
     ...details,
   });
+}
+
+function addDays(date: Date, days: number) {
+  return new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
 }
 
 export async function GET(request: NextRequest) {
@@ -93,6 +98,8 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    const trialStartedAt = new Date();
+    const trialEndsAt = addDays(trialStartedAt, COMPRE_JUNTO_PLAN.trialDays);
     const savedStore = await prisma.store.upsert({
       where: {
         nuvemshopStoreId: token.storeId,
@@ -100,8 +107,11 @@ export async function GET(request: NextRequest) {
       create: {
         nuvemshopStoreId: token.storeId,
         accessTokenCiphertext,
+        commercialStatus: "TRIALING",
         disconnectedAt: null,
         scopes: token.scopes,
+        trialEndsAt,
+        trialStartedAt,
       },
       update: {
         accessTokenCiphertext,
@@ -109,15 +119,32 @@ export async function GET(request: NextRequest) {
         scopes: token.scopes,
       },
       select: {
+        commercialStatus: true,
         id: true,
         nuvemshopStoreId: true,
+        trialEndsAt: true,
+        trialStartedAt: true,
         updatedAt: true,
       },
     });
+    const existingTrialStartedAt = savedStore.trialStartedAt ?? trialStartedAt;
+
+    if (!savedStore.trialStartedAt || !savedStore.trialEndsAt) {
+      await prisma.store.update({
+        where: {
+          id: savedStore.id,
+        },
+        data: {
+          trialEndsAt: savedStore.trialEndsAt ?? addDays(existingTrialStartedAt, COMPRE_JUNTO_PLAN.trialDays),
+          trialStartedAt: existingTrialStartedAt,
+        },
+      });
+    }
 
     logSafeCallbackDiagnostic("store_upsert_success", {
       storeId: savedStore.id,
       providerStoreId: savedStore.nuvemshopStoreId,
+      commercialStatus: savedStore.commercialStatus,
       updatedAt: savedStore.updatedAt.toISOString(),
       hasAccessToken: true,
       scopesCount: token.scopes.length,

@@ -1,5 +1,7 @@
 import Link from "next/link";
 
+import { CommercialStatusBanner } from "@/app/admin/commercial-status-banner";
+import { resolveStoreCommercialAccess } from "@/src/lib/billing/commercial-status";
 import { getConnectedStore } from "@/src/lib/stores/current-store";
 
 export const dynamic = "force-dynamic";
@@ -8,6 +10,7 @@ export const runtime = "nodejs";
 export default async function AdminPage() {
   const connectedStore = await getConnectedStore();
   const isConnected = Boolean(connectedStore);
+  const commercialAccess = connectedStore ? resolveStoreCommercialAccess(connectedStore) : null;
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-zinc-50 px-6 py-16 text-zinc-950">
@@ -23,6 +26,7 @@ export default async function AdminPage() {
         </p>
         {connectedStore ? (
           <>
+            {commercialAccess ? <CommercialStatusBanner access={commercialAccess} /> : null}
             <dl className="grid gap-3 border-t border-zinc-200 pt-5 text-sm text-zinc-600">
               <div className="flex items-center justify-between gap-4">
                 <dt className="font-medium text-zinc-800">Status</dt>

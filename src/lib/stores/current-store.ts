@@ -64,9 +64,13 @@ export async function getConnectedStore() {
           updatedAt: "desc",
         },
         select: {
+          commercialStatus: true,
           id: true,
+          installedAt: true,
           createdAt: true,
           nuvemshopStoreId: true,
+          trialEndsAt: true,
+          trialStartedAt: true,
           updatedAt: true,
         },
       }),

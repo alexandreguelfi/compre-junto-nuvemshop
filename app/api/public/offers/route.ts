@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
 
+import { resolveStoreCommercialAccess, type CommercialStatus } from "@/src/lib/billing/commercial-status";
 import { decryptAccessTokenFromStorage } from "@/src/lib/nuvemshop/auth";
 import { prisma } from "@/src/lib/prisma";
 
@@ -34,9 +35,14 @@ const connectedStoreWhere = {
 type PublicStoreLookup =
   | {
       accessTokenCiphertext: string;
+      commercialStatus: CommercialStatus;
+      createdAt: Date;
+      installedAt: Date;
       providerStoreId: string;
       reason: "ok";
       storeId: string;
+      trialEndsAt: Date | null;
+      trialStartedAt: Date | null;
     }
   | {
       reason: "no_connected_store" | "store_id_required";
@@ -67,17 +73,27 @@ async function findPublicStore(providerStoreId: string | null): Promise<PublicSt
       },
       select: {
         accessTokenCiphertext: true,
+        commercialStatus: true,
+        createdAt: true,
         id: true,
+        installedAt: true,
         nuvemshopStoreId: true,
+        trialEndsAt: true,
+        trialStartedAt: true,
       },
     });
 
     return store && store.accessTokenCiphertext
       ? {
           accessTokenCiphertext: store.accessTokenCiphertext,
+          commercialStatus: store.commercialStatus,
+          createdAt: store.createdAt,
+          installedAt: store.installedAt,
           providerStoreId: store.nuvemshopStoreId,
           reason: "ok",
           storeId: store.id,
+          trialEndsAt: store.trialEndsAt,
+          trialStartedAt: store.trialStartedAt,
         }
       : { reason: "no_connected_store", storeId: null };
   }
@@ -89,8 +105,13 @@ async function findPublicStore(providerStoreId: string | null): Promise<PublicSt
     },
     select: {
       accessTokenCiphertext: true,
+      commercialStatus: true,
+      createdAt: true,
       id: true,
+      installedAt: true,
       nuvemshopStoreId: true,
+      trialEndsAt: true,
+      trialStartedAt: true,
     },
     take: 2,
   });
@@ -98,9 +119,14 @@ async function findPublicStore(providerStoreId: string | null): Promise<PublicSt
   if (stores.length === 1 && stores[0].accessTokenCiphertext) {
     return {
       accessTokenCiphertext: stores[0].accessTokenCiphertext,
+      commercialStatus: stores[0].commercialStatus,
+      createdAt: stores[0].createdAt,
+      installedAt: stores[0].installedAt,
       providerStoreId: stores[0].nuvemshopStoreId,
       reason: "ok",
       storeId: stores[0].id,
+      trialEndsAt: stores[0].trialEndsAt,
+      trialStartedAt: stores[0].trialStartedAt,
     };
   }
 
@@ -248,6 +274,12 @@ export async function GET(request: NextRequest) {
     }
 
     if (!store.storeId) {
+      return offerNotFound();
+    }
+
+    const commercialAccess = resolveStoreCommercialAccess(store);
+
+    if (!commercialAccess.canDisplayWidget) {
       return offerNotFound();
     }
 
