@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "prisma generate && next build",
+    "build": "prisma generate && npm run build:nube && next build",
+    "build:nube": "tsup --config storefront-nube/tsup.config.mjs",
     "start": "next start",
     "lint": "eslint",
     "prisma:generate": "prisma generate",
@@ -22,6 +23,9 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@tiendanube/nube-sdk-jsx": "^0.18.0",
+    "@tiendanube/nube-sdk-types": "^0.79.0",
+    "@tiendanube/nube-sdk-ui": "^0.19.0",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
@@ -29,6 +33,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.9",
     "tailwindcss": "^4",
+    "tsup": "^8.5.1",
     "typescript": "^5"
   }
 }

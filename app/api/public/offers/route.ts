@@ -175,6 +175,21 @@ function normalizePublicUrl(value: unknown): string | null {
   }
 }
 
+function normalizePublicPath(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const url = new URL(value);
+    const path = `${url.pathname}${url.search}${url.hash}`;
+
+    return path.startsWith("/") ? path : null;
+  } catch {
+    return null;
+  }
+}
+
 async function readJsonObject(response: Response): Promise<Record<string, unknown> | null> {
   try {
     const data = (await response.json()) as unknown;
@@ -311,6 +326,7 @@ export async function GET(request: NextRequest) {
       productId: offer.suggestedProductId,
       providerStoreId: store.providerStoreId,
     });
+    const suggestedProductPath = normalizePublicPath(suggestedProductUrl);
 
     return publicJson({
       offer: {
@@ -318,6 +334,7 @@ export async function GET(request: NextRequest) {
         suggestedProduct: {
           id: offer.suggestedProductId,
           name: offer.suggestedProductName,
+          path: suggestedProductPath,
           url: suggestedProductUrl,
         },
       },
