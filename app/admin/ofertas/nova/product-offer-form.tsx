@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { type FormEvent, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import type { NuvemshopAdminProduct } from "@/src/lib/nuvemshop/products";
 
@@ -13,6 +13,19 @@ type ProductOfferFormProps = {
 type FormMessage = {
   kind: "error" | "success";
   text: string;
+};
+
+const OFFER_FORM_MESSAGES = {
+  missingFields: "Preencha todos os itens obrigatórios para salvar a oferta.",
+  missingSuggestedName: "Informe o nome do produto sugerido para continuar.",
+  missingSuggestedProduct: "Selecione o produto sugerido para continuar.",
+  missingTriggerName: "Informe o nome do produto principal para continuar.",
+  missingTriggerProduct: "Selecione o produto principal para continuar.",
+  sameProduct: "Escolha produtos diferentes para criar uma oferta Compre Junto.",
+  saveFailed: "Nao foi possivel salvar a oferta.",
+  saveFailedRetry: "Nao foi possivel salvar a oferta agora. Tente novamente.",
+  saving: "Validacoes ok. Salvando oferta...",
+  saved: "Oferta salva. Redirecionando...",
 };
 
 function findProduct(products: NuvemshopAdminProduct[], productId: string) {
@@ -55,6 +68,7 @@ export function ProductOfferForm({ products, productsLoadFailed }: ProductOfferF
   const [triggerProductName, setTriggerProductName] = useState("");
   const [message, setMessage] = useState<FormMessage | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const messageRef = useRef<HTMLDivElement | null>(null);
 
   const hasProducts = products.length > 0;
   const hasSameProduct =
@@ -73,25 +87,54 @@ export function ProductOfferForm({ products, productsLoadFailed }: ProductOfferF
     return `${products.length} produtos carregados da Nuvemshop.`;
   }, [hasProducts, products.length, productsLoadFailed]);
 
+  useEffect(() => {
+    if (message?.kind !== "error") {
+      return;
+    }
+
+    messageRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "center",
+    });
+    messageRef.current?.focus({
+      preventScroll: true,
+    });
+  }, [message]);
+
   function getClientValidationError() {
-    if (!triggerProductId.trim()) {
-      return "Informe o ID do produto principal.";
+    const missingTriggerProduct = !triggerProductId.trim();
+    const missingTriggerName = Boolean(triggerProductId.trim()) && !triggerProductName.trim();
+    const missingSuggestedProduct = !suggestedProductId.trim();
+    const missingSuggestedName = Boolean(suggestedProductId.trim()) && !suggestedProductName.trim();
+    const missingItems = [
+      missingTriggerProduct,
+      missingTriggerName,
+      missingSuggestedProduct,
+      missingSuggestedName,
+    ].filter(Boolean).length;
+
+    if (missingItems > 1) {
+      return OFFER_FORM_MESSAGES.missingFields;
     }
 
-    if (!triggerProductName.trim()) {
-      return "Informe o nome do produto principal.";
+    if (missingTriggerProduct) {
+      return OFFER_FORM_MESSAGES.missingTriggerProduct;
     }
 
-    if (!suggestedProductId.trim()) {
-      return "Informe o ID do produto sugerido.";
+    if (missingTriggerName) {
+      return OFFER_FORM_MESSAGES.missingTriggerName;
     }
 
-    if (!suggestedProductName.trim()) {
-      return "Informe o nome do produto sugerido.";
+    if (missingSuggestedProduct) {
+      return OFFER_FORM_MESSAGES.missingSuggestedProduct;
+    }
+
+    if (missingSuggestedName) {
+      return OFFER_FORM_MESSAGES.missingSuggestedName;
     }
 
     if (hasSameProduct) {
-      return "O produto principal e o produto sugerido devem ser diferentes.";
+      return OFFER_FORM_MESSAGES.sameProduct;
     }
 
     return null;
@@ -127,7 +170,7 @@ export function ProductOfferForm({ products, productsLoadFailed }: ProductOfferF
     const formData = new FormData(form);
 
     setIsSubmitting(true);
-    setMessage({ kind: "success", text: "Validacoes ok. Salvando oferta..." });
+    setMessage({ kind: "success", text: OFFER_FORM_MESSAGES.saving });
 
     try {
       const response = await fetch(form.action, {
@@ -136,7 +179,7 @@ export function ProductOfferForm({ products, productsLoadFailed }: ProductOfferF
       });
 
       if (response.redirected) {
-        setMessage({ kind: "success", text: "Oferta salva. Redirecionando..." });
+        setMessage({ kind: "success", text: OFFER_FORM_MESSAGES.saved });
         window.location.href = response.url;
         return;
       }
@@ -146,16 +189,16 @@ export function ProductOfferForm({ products, productsLoadFailed }: ProductOfferF
       if (!response.ok) {
         setMessage({
           kind: "error",
-          text: payload?.error ?? "Nao foi possivel salvar a oferta.",
+          text: payload?.error ?? OFFER_FORM_MESSAGES.saveFailed,
         });
         setIsSubmitting(false);
         return;
       }
 
-      setMessage({ kind: "success", text: "Oferta salva. Redirecionando..." });
+      setMessage({ kind: "success", text: OFFER_FORM_MESSAGES.saved });
       window.location.href = "/admin/ofertas?created=1";
     } catch {
-      setMessage({ kind: "error", text: "Nao foi possivel salvar a oferta agora. Tente novamente." });
+      setMessage({ kind: "error", text: OFFER_FORM_MESSAGES.saveFailedRetry });
       setIsSubmitting(false);
     }
   }
@@ -165,7 +208,9 @@ export function ProductOfferForm({ products, productsLoadFailed }: ProductOfferF
       {message ? (
         <div
           aria-live="polite"
+          ref={messageRef}
           role={message.kind === "error" ? "alert" : "status"}
+          tabIndex={-1}
           className={
             message.kind === "error"
               ? "rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800"
@@ -250,7 +295,7 @@ export function ProductOfferForm({ products, productsLoadFailed }: ProductOfferF
         </label>
         {hasSameProduct ? (
           <p role="alert" className="text-sm font-medium text-red-700">
-            O produto principal e o produto sugerido devem ser diferentes.
+            {OFFER_FORM_MESSAGES.sameProduct}
           </p>
         ) : null}
       </section>

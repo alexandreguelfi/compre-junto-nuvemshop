@@ -14,6 +14,20 @@ type OfferFormInput = {
   isActive: boolean;
 };
 
+const OFFER_FORM_MESSAGES = {
+  duplicateActive:
+    "Este produto principal ja tem uma oferta ativa. Desative a oferta existente ou crie esta como inativa.",
+  invalidFormData: "Dados da oferta invalidos.",
+  missingFields: "Preencha todos os itens obrigatórios para salvar a oferta.",
+  missingStore: "Loja conectada nao encontrada.",
+  missingSuggestedName: "Informe o nome do produto sugerido para continuar.",
+  missingSuggestedProduct: "Selecione o produto sugerido para continuar.",
+  missingTriggerName: "Informe o nome do produto principal para continuar.",
+  missingTriggerProduct: "Selecione o produto principal para continuar.",
+  sameProduct: "Escolha produtos diferentes para criar uma oferta Compre Junto.",
+  saveFailed: "Nao foi possivel salvar a oferta agora.",
+};
+
 function readTextField(formData: FormData, fieldName: string): string {
   const value = formData.get(fieldName);
 
@@ -35,24 +49,39 @@ function parseOfferForm(formData: FormData): OfferFormInput {
 }
 
 function getValidationError(input: OfferFormInput): string | null {
-  if (!input.triggerProductId) {
-    return "Informe o ID do produto principal.";
+  const missingTriggerProduct = !input.triggerProductId;
+  const missingTriggerName = Boolean(input.triggerProductId) && !input.triggerProductName;
+  const missingSuggestedProduct = !input.suggestedProductId;
+  const missingSuggestedName = Boolean(input.suggestedProductId) && !input.suggestedProductName;
+  const missingItems = [
+    missingTriggerProduct,
+    missingTriggerName,
+    missingSuggestedProduct,
+    missingSuggestedName,
+  ].filter(Boolean).length;
+
+  if (missingItems > 1) {
+    return OFFER_FORM_MESSAGES.missingFields;
   }
 
-  if (!input.triggerProductName) {
-    return "Informe o nome do produto principal.";
+  if (missingTriggerProduct) {
+    return OFFER_FORM_MESSAGES.missingTriggerProduct;
   }
 
-  if (!input.suggestedProductId) {
-    return "Informe o ID do produto sugerido.";
+  if (missingTriggerName) {
+    return OFFER_FORM_MESSAGES.missingTriggerName;
   }
 
-  if (!input.suggestedProductName) {
-    return "Informe o nome do produto sugerido.";
+  if (missingSuggestedProduct) {
+    return OFFER_FORM_MESSAGES.missingSuggestedProduct;
+  }
+
+  if (missingSuggestedName) {
+    return OFFER_FORM_MESSAGES.missingSuggestedName;
   }
 
   if (input.triggerProductId === input.suggestedProductId) {
-    return "O produto principal e o produto sugerido devem ser diferentes.";
+    return OFFER_FORM_MESSAGES.sameProduct;
   }
 
   return null;
@@ -80,7 +109,7 @@ export async function POST(request: Request) {
   const store = await getConnectedStore();
 
   if (!store?.id) {
-    return jsonError("Loja conectada nao encontrada.", 401);
+    return jsonError(OFFER_FORM_MESSAGES.missingStore, 401);
   }
 
   let input: OfferFormInput;
@@ -92,7 +121,7 @@ export async function POST(request: Request) {
       name: error instanceof Error ? error.name : "unknown",
     });
 
-    return jsonError("Dados da oferta invalidos.", 400);
+    return jsonError(OFFER_FORM_MESSAGES.invalidFormData, 400);
   }
 
   const validationError = getValidationError(input);
@@ -119,10 +148,7 @@ export async function POST(request: Request) {
       });
 
       if (duplicateOffer) {
-        return jsonError(
-          "Ja existe uma oferta ativa para este produto principal nesta loja. Desative a oferta existente ou crie esta como inativa.",
-          409,
-        );
+        return jsonError(OFFER_FORM_MESSAGES.duplicateActive, 409);
       }
     }
 
@@ -147,6 +173,6 @@ export async function POST(request: Request) {
       name: error instanceof Error ? error.name : "unknown",
     });
 
-    return jsonError("Nao foi possivel salvar a oferta agora.", 500);
+    return jsonError(OFFER_FORM_MESSAGES.saveFailed, 500);
   }
 }
