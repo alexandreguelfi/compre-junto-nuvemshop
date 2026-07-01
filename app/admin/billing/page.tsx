@@ -28,7 +28,7 @@ export default async function BillingPage({ searchParams }: BillingPageProps) {
   const plan = getBillingPlanConfig();
   const showCheckoutReturn = getCheckoutFeedback(params.checkout);
   const disabledReason = !plan.mercadoPagoPlanId
-    ? "Configure COMPRE_JUNTO_MP_PLAN_ID para habilitar checkout."
+    ? "O plano de assinatura ainda nao esta configurado para pagamento."
     : null;
 
   return (
@@ -38,15 +38,15 @@ export default async function BillingPage({ searchParams }: BillingPageProps) {
           Voltar para ofertas
         </Link>
         <p className="mt-5 text-sm font-medium uppercase tracking-wide text-zinc-500">Compre Junto</p>
-        <h1 className="mt-2 text-3xl font-semibold tracking-tight">Billing Mercado Pago</h1>
+        <h1 className="mt-2 text-3xl font-semibold tracking-tight">Plano e assinatura</h1>
         <p className="mt-2 text-sm leading-6 text-zinc-600">
-          Controle comercial do plano Compre Junto Pro sem alterar o widget NubeSDK validado em producao.
+          Gerencie sua assinatura do Compre Junto Pro. O pagamento e feito com seguranca pelo Mercado Pago.
         </p>
       </header>
 
       {showCheckoutReturn ? (
         <section className="mt-6 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
-          Retorno do Mercado Pago recebido. O status final sera confirmado pelo webhook.
+          Voltamos do Mercado Pago. A confirmacao final da assinatura acontece automaticamente em alguns instantes.
         </section>
       ) : null}
 
@@ -64,7 +64,7 @@ export default async function BillingPage({ searchParams }: BillingPageProps) {
               <p className="text-sm font-medium uppercase tracking-wide text-zinc-500">Plano</p>
               <h2 className="mt-2 text-2xl font-semibold">{plan.name}</h2>
               <p className="mt-2 text-sm leading-6 text-zinc-600">
-                {plan.priceLabel}. Trial configuravel de {plan.trialDays} dias.
+                {plan.priceLabel}. Periodo gratis de {plan.trialDays} dias para validar o app.
               </p>
               <dl className="mt-5 grid gap-3 text-sm text-zinc-600">
                 <div className="flex items-center justify-between gap-4">
@@ -72,38 +72,38 @@ export default async function BillingPage({ searchParams }: BillingPageProps) {
                   <dd>{store.nuvemshopStoreId}</dd>
                 </div>
                 <div className="flex items-center justify-between gap-4">
-                  <dt className="font-medium text-zinc-800">Status interno</dt>
+                  <dt className="font-medium text-zinc-800">Situacao do plano</dt>
                   <dd>{access?.status ?? "BLOCKED"}</dd>
                 </div>
                 <div className="flex items-center justify-between gap-4">
-                  <dt className="font-medium text-zinc-800">Status Mercado Pago</dt>
+                  <dt className="font-medium text-zinc-800">Confirmacao Mercado Pago</dt>
                   <dd>{access?.externalStatus ?? "Nao informado"}</dd>
                 </div>
                 <div className="flex items-center justify-between gap-4">
-                  <dt className="font-medium text-zinc-800">Periodo atual</dt>
+                  <dt className="font-medium text-zinc-800">Proxima renovacao</dt>
                   <dd>{formatDate(access?.currentPeriodEnd ?? null)}</dd>
                 </div>
                 <div className="flex items-center justify-between gap-4">
-                  <dt className="font-medium text-zinc-800">Feature flag</dt>
-                  <dd>{access?.modeLabel ?? (plan.enforcementEnabled ? "Enforcement ativo" : "Modo teste")}</dd>
+                  <dt className="font-medium text-zinc-800">Modo de acesso</dt>
+                  <dd>{access?.modeLabel ?? (plan.enforcementEnabled ? "Controle comercial ativo" : "Acesso liberado para testes")}</dd>
                 </div>
               </dl>
             </div>
 
             <section className="rounded-md border border-zinc-200 bg-white p-6">
-              <h2 className="text-lg font-semibold">Status comercial</h2>
+              <h2 className="text-lg font-semibold">Situacao da assinatura</h2>
               <p className="mt-2 text-sm leading-6 text-zinc-600">
-                {access?.message ?? "Nenhum status comercial encontrado para esta loja."}
+                {access?.message ?? "Ainda nao encontramos uma assinatura vinculada a esta loja."}
               </p>
               <div className="mt-4 flex flex-wrap gap-2 text-xs font-semibold">
                 <span className="rounded-full bg-zinc-100 px-2 py-1 text-zinc-700 ring-1 ring-zinc-200">
-                  {plan.enforcementEnabled ? "bloqueio ativo" : "bloqueio desligado"}
+                  {plan.enforcementEnabled ? "controle ativo" : "acesso liberado para testes"}
                 </span>
                 <span className="rounded-full bg-zinc-100 px-2 py-1 text-zinc-700 ring-1 ring-zinc-200">
-                  plan id {plan.mercadoPagoPlanId ? "configurado" : "nao configurado"}
+                  plano {plan.mercadoPagoPlanId ? "configurado" : "nao configurado"}
                 </span>
                 <span className="rounded-full bg-zinc-100 px-2 py-1 text-zinc-700 ring-1 ring-zinc-200">
-                  webhook secret {plan.webhookSecretConfigured ? "configurado" : "ausente"}
+                  confirmacao automatica {plan.webhookSecretConfigured ? "configurada" : "pendente"}
                 </span>
               </div>
             </section>
@@ -112,9 +112,9 @@ export default async function BillingPage({ searchParams }: BillingPageProps) {
           <aside className="grid content-start gap-4">
             <BillingCheckoutAction defaultEmail={store.email ?? null} disabledReason={disabledReason} />
             <section className="rounded-md border border-zinc-200 bg-white p-5 text-sm leading-6 text-zinc-600">
-              <h2 className="font-semibold text-zinc-900">Operacao segura</h2>
+              <h2 className="font-semibold text-zinc-900">Validacao segura</h2>
               <p className="mt-2">
-                Com o enforcement desligado, o admin e a API publica continuam liberados enquanto o billing e validado.
+                Enquanto a assinatura real e validada, o app continua liberado para testes quando o controle comercial estiver desligado.
               </p>
             </section>
           </aside>

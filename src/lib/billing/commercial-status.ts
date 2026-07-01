@@ -109,7 +109,7 @@ function isTrialActive(now: Date, trialEndsAt: Date) {
 function formatTrialMessage(daysRemaining: number) {
   const unit = daysRemaining === 1 ? "dia restante" : "dias restantes";
 
-  return `Trial: ${daysRemaining} ${unit}.`;
+  return `Periodo gratis: ${daysRemaining} ${unit}.`;
 }
 
 function isActiveBillingStatus(status: BillingStatus) {
@@ -155,11 +155,11 @@ function getStatusMessage(args: {
   status: BillingStatus;
 }) {
   if (!args.enforcementEnabled && !args.hasEntitlement) {
-    return `Modo teste de billing: uso liberado mesmo com status ${args.status}.`;
+    return `Ambiente de validacao: acesso liberado enquanto finalizamos a assinatura. Status atual: ${args.status}.`;
   }
 
   if (!args.enforcementEnabled) {
-    return `Modo teste de billing: bloqueio comercial desligado. ${args.status === "TRIAL" ? formatTrialMessage(args.daysRemaining) : `${args.planName} ativo.`}`;
+    return `Ambiente de validacao: acesso liberado para testes. ${args.status === "TRIAL" ? formatTrialMessage(args.daysRemaining) : `${args.planName} ativo.`}`;
   }
 
   if (args.status === "ACTIVE") {
@@ -171,18 +171,18 @@ function getStatusMessage(args: {
   }
 
   if (args.status === "PENDING") {
-    return `Assinatura pendente. Conclua o checkout do ${args.planName} para liberar o app.`;
+    return `Assinatura em andamento. Conclua o pagamento do ${args.planName} para liberar o app.`;
   }
 
   if (args.status === "CANCELED") {
-    return `Assinatura cancelada. Assine o ${args.planName} por ${args.planPriceLabel} para continuar.`;
+    return `Assinatura cancelada. Reative o ${args.planName} por ${args.planPriceLabel} para continuar.`;
   }
 
   if (args.status === "BLOCKED") {
-    return `Acesso bloqueado. Regularize o ${args.planName} para continuar.`;
+    return `Acesso temporariamente bloqueado. Regularize o ${args.planName} para continuar.`;
   }
 
-  return `Pagamento pendente. Regularize o ${args.planName} por ${args.planPriceLabel} para continuar.`;
+  return `Pagamento pendente. Regularize o ${args.planName} por ${args.planPriceLabel} para continuar usando o app.`;
 }
 
 export function getBillingPlanConfig(): BillingPlanConfig {
@@ -278,7 +278,7 @@ export function resolveStoreCommercialAccess(
       planPriceLabel: config.priceLabel,
       status,
     }),
-    modeLabel: config.enforcementEnabled ? "Enforcement ativo" : "Modo teste",
+    modeLabel: config.enforcementEnabled ? "Controle comercial ativo" : "Acesso liberado para testes",
     planName: config.name,
     planPriceLabel: config.priceLabel,
     providerPlanId: subscription?.providerPlanId ?? null,

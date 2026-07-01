@@ -26,7 +26,7 @@ export function BillingCheckoutAction({ defaultEmail, disabledReason }: BillingC
     }
 
     setIsSubmitting(true);
-    setMessage("Preparando checkout hospedado no Mercado Pago...");
+    setMessage("Preparando pagamento seguro...");
 
     try {
       const response = await fetch("/api/billing/checkout", {
@@ -41,15 +41,15 @@ export function BillingCheckoutAction({ defaultEmail, disabledReason }: BillingC
       const payload = (await response.json().catch(() => null)) as CheckoutResponse | null;
 
       if (!response.ok || !payload?.checkoutUrl) {
-        setMessage(payload?.error ?? "Nao foi possivel criar o checkout agora.");
+        setMessage(payload?.error ?? "Nao conseguimos iniciar o pagamento agora. Tente novamente em alguns instantes.");
         setIsSubmitting(false);
         return;
       }
 
-      setMessage("Checkout criado. Redirecionando...");
+      setMessage("Tudo pronto. Abrindo o Mercado Pago...");
       window.location.href = payload.checkoutUrl;
     } catch {
-      setMessage("Nao foi possivel criar o checkout agora.");
+      setMessage("Nao conseguimos iniciar o pagamento agora. Tente novamente em alguns instantes.");
       setIsSubmitting(false);
     }
   }
@@ -57,7 +57,7 @@ export function BillingCheckoutAction({ defaultEmail, disabledReason }: BillingC
   return (
     <form onSubmit={handleSubmit} className="grid gap-4 rounded-md border border-zinc-200 bg-white p-5">
       <label className="grid gap-2 text-sm font-medium text-zinc-800">
-        E-mail do pagador (opcional)
+        E-mail para pagamento (opcional)
         <input
           autoComplete="email"
           disabled={isSubmitting || Boolean(disabledReason)}
@@ -87,7 +87,7 @@ export function BillingCheckoutAction({ defaultEmail, disabledReason }: BillingC
         type="submit"
         className="inline-flex h-10 items-center justify-center rounded-md bg-zinc-950 px-4 text-sm font-medium text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-zinc-400"
       >
-        {isSubmitting ? "Preparando checkout..." : "Assinar agora"}
+        {isSubmitting ? "Preparando..." : "Ir para pagamento"}
       </button>
     </form>
   );
