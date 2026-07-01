@@ -24,6 +24,78 @@ O fallback diagnostico nao foi removido: ele aparece apenas em modo seguro/dev, 
 
 O CTA atual abre o produto recomendado quando ha URL/path disponivel. O botao de adicionar o conjunto ao carrinho ainda nao foi habilitado porque o repositorio nao possui endpoint proprio para isso e o payload `cart:add` para dois itens ainda nao foi validado no PDP.
 
+## Validacao producao pos-3eda2ef
+
+Em 2026-07-01, apos o commit `3eda2ef`, foi validado o fluxo dinamico real no PDP:
+
+```text
+https://lojadedemonstracaodeaplic2.lojavirtualnuvem.com.br/produtos/produto-a-1dgkr/
+```
+
+Resultado do bundle publico no Railway:
+
+- `https://compre-junto-nuvemshop-production.up.railway.app/nube/compre-junto.js` respondeu HTTP 200;
+- o arquivo servido contem `Compre junto`;
+- o arquivo servido contem `/api/public/offers`;
+- o arquivo servido contem `Ver produto recomendado`;
+- o arquivo servido contem `Compre Junto NubeSDK em modo diagnostico`;
+- o arquivo servido nao contem o diagnostico fixo antigo `Compre Junto NubeSDK onload otimizado ativo`.
+
+Resultado observado no PDP, sem parametros de debug e depois de primeira interacao:
+
+- o slot NubeSDK `after_product_detail_add_to_cart` foi montado;
+- o storefront renderizou o diagnostico antigo `Compre Junto NubeSDK onload otimizado ativo`;
+- o storefront renderizou o subtitulo antigo `Render diagnostico com fallback direto no PDP`;
+- o bloco dinamico `Compre junto` nao apareceu;
+- as linhas `Produto principal` e `Produto recomendado` nao apareceram;
+- o CTA `Ver produto recomendado` nao apareceu no PDP;
+- o fallback seguro/dev novo `Compre Junto NubeSDK em modo diagnostico` nao apareceu;
+- nao foram observados erros ou warnings criticos no console durante a validacao.
+
+Uma segunda visita com `?validacao=3eda2ef`, sem ativar `cj_debug`, repetiu o mesmo resultado: o slot ficou com `data-nubesdk-mounted="true"` e texto do diagnostico antigo.
+
+Produto principal identificado no DOM do PDP:
+
+```text
+productId: 352962585
+variantId: 1550777338
+nome: Produto A
+preco: R$10,00
+```
+
+Resultado do endpoint publico de ofertas:
+
+- `GET /api/public/offers?productId=352962585&storeId=7901767` respondeu HTTP 200 com oferta ativa;
+- `GET /api/public/offers?productId=352962585` tambem respondeu HTTP 200 com oferta ativa;
+- `GET /api/public/offers?productId=352962585&storeId=23147500` respondeu HTTP 200 com `offer: null`, indicando que `23147500` provavelmente e versao/cache do storefront, nao o id real da loja.
+
+Oferta retornada para o produto atual:
+
+```json
+{
+  "principalProductId": "352962585",
+  "suggestedProduct": {
+    "id": "352962686",
+    "name": "Produto B",
+    "imageUrl": null,
+    "variantId": "1550778182",
+    "price": "90.00",
+    "compareAtPrice": "90.00",
+    "promotionalPrice": null,
+    "path": "/produtos/produto-b-q9rz6/",
+    "url": "https://lojadedemonstracaodeaplic2.lojavirtualnuvem.com.br/produtos/produto-b-q9rz6/"
+  }
+}
+```
+
+O campo `imageUrl` veio presente, mas `null`, porque o produto recomendado esta sem imagem propria na loja teste. O clique real do CTA dinamico no PDP nao foi validado porque o CTA nao renderizou; a URL recomendada retornada pela API respondeu HTTP 200 com titulo `Produto B`.
+
+Conclusao desta validacao: o Railway esta servindo o bundle dinamico correto e o endpoint publico ja retorna oferta ativa enriquecida para o produto atual. O fluxo dinamico ainda nao foi validado de ponta a ponta no PDP porque a versao efetivamente executada pela Nuvemshop/storefront ainda e a diagnostica antiga. O proximo passo operacional e ativar/publicar no Nuvemshop Partners a versao do app script gerada a partir do commit `3eda2ef`, preferencialmente com URL versionada como:
+
+```text
+https://compre-junto-nuvemshop-production.up.railway.app/nube/compre-junto.js?v=3eda2ef
+```
+
 ## URL publica do NubeSDK
 
 URL base correta do bundle NubeSDK:
