@@ -65,6 +65,7 @@ export async function getConnectedStore() {
         },
         select: {
           commercialStatus: true,
+          email: true,
           id: true,
           installedAt: true,
           createdAt: true,

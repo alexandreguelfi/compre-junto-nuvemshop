@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { resolveStoreCommercialAccess } from "@/src/lib/billing/commercial-status";
+import { getCommercialStatus } from "@/src/lib/billing/commercial-status";
 import { prisma } from "@/src/lib/prisma";
 import { getConnectedStore } from "@/src/lib/stores/current-store";
 
@@ -113,10 +113,10 @@ export async function POST(request: Request) {
     return jsonError(OFFER_FORM_MESSAGES.missingStore, 401);
   }
 
-  const commercialAccess = resolveStoreCommercialAccess(store);
+  const commercialAccess = await getCommercialStatus(store.id);
 
-  if (!commercialAccess.canCreateOffer) {
-    return jsonError(commercialAccess.message, 403);
+  if (!commercialAccess?.canCreateOffer) {
+    return jsonError(commercialAccess?.message ?? "Acesso comercial nao liberado.", 403);
   }
 
   let input: OfferFormInput;

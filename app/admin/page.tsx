@@ -1,7 +1,7 @@
 import Link from "next/link";
 
 import { CommercialStatusBanner } from "@/app/admin/commercial-status-banner";
-import { resolveStoreCommercialAccess } from "@/src/lib/billing/commercial-status";
+import { getCommercialStatus } from "@/src/lib/billing/commercial-status";
 import { getConnectedStore } from "@/src/lib/stores/current-store";
 
 export const dynamic = "force-dynamic";
@@ -10,7 +10,7 @@ export const runtime = "nodejs";
 export default async function AdminPage() {
   const connectedStore = await getConnectedStore();
   const isConnected = Boolean(connectedStore);
-  const commercialAccess = connectedStore ? resolveStoreCommercialAccess(connectedStore) : null;
+  const commercialAccess = connectedStore ? await getCommercialStatus(connectedStore.id) : null;
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-zinc-50 px-6 py-16 text-zinc-950">
@@ -46,6 +46,12 @@ export default async function AdminPage() {
               className="inline-flex h-10 items-center justify-center rounded-md bg-zinc-950 px-4 text-sm font-medium text-white transition hover:bg-zinc-800"
             >
               Gerenciar ofertas
+            </Link>
+            <Link
+              href="/admin/billing"
+              className="ml-3 inline-flex h-10 items-center justify-center rounded-md border border-zinc-300 px-4 text-sm font-medium text-zinc-700 transition hover:bg-zinc-100"
+            >
+              Billing
             </Link>
           </>
         ) : null}

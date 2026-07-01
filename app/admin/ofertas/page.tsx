@@ -1,6 +1,8 @@
 import Link from "next/link";
 
+import { CommercialStatusBanner } from "@/app/admin/commercial-status-banner";
 import { OfferStatusAction } from "@/app/admin/ofertas/offer-status-action";
+import { getCommercialStatus } from "@/src/lib/billing/commercial-status";
 import { prisma } from "@/src/lib/prisma";
 import { getConnectedStore } from "@/src/lib/stores/current-store";
 
@@ -60,6 +62,7 @@ export default async function OffersPage({ searchParams }: OffersPageProps) {
   const showCreatedFeedback = hasCreatedFeedback(params.created);
   const showUpdatedFeedback = hasUpdatedFeedback(params.updated);
   const store = await getConnectedStore();
+  const commercialAccess = store ? await getCommercialStatus(store.id) : null;
   const offers = store ? await getOffers(store.id) : [];
 
   return (
@@ -79,6 +82,12 @@ export default async function OffersPage({ searchParams }: OffersPageProps) {
           Criar oferta
         </Link>
       </header>
+
+      {commercialAccess ? (
+        <div className="mt-6">
+          <CommercialStatusBanner access={commercialAccess} />
+        </div>
+      ) : null}
 
       {showCreatedFeedback ? (
         <section

@@ -2,7 +2,7 @@ import Link from "next/link";
 
 import { CommercialStatusBanner } from "@/app/admin/commercial-status-banner";
 import { ProductOfferForm } from "@/app/admin/ofertas/nova/product-offer-form";
-import { resolveStoreCommercialAccess } from "@/src/lib/billing/commercial-status";
+import { getCommercialStatus } from "@/src/lib/billing/commercial-status";
 import { listConnectedStoreProducts } from "@/src/lib/nuvemshop/products";
 import { getConnectedStore } from "@/src/lib/stores/current-store";
 
@@ -11,7 +11,7 @@ export const runtime = "nodejs";
 
 export default async function NewOfferPage() {
   const store = await getConnectedStore();
-  const commercialAccess = store ? resolveStoreCommercialAccess(store) : null;
+  const commercialAccess = store ? await getCommercialStatus(store.id) : null;
   const canCreateOffer = Boolean(commercialAccess?.canCreateOffer);
   const productsResult = store && canCreateOffer
     ? await listConnectedStoreProducts().then(

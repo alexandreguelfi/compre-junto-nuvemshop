@@ -20,6 +20,19 @@ enum CommercialStatus {
   CANCELED
 }
 
+enum BillingProvider {
+  MERCADO_PAGO
+}
+
+enum BillingStatus {
+  TRIAL
+  ACTIVE
+  PENDING
+  PAST_DUE
+  CANCELED
+  BLOCKED
+}
+
 enum BundleStatus {
   DRAFT
   ACTIVE
@@ -71,12 +84,35 @@ model Store {
   variants              ProductVariant[]
   bundles               Bundle[]
   crossSellOffers       CrossSellOffer[]
+  billingSubscriptions  BillingSubscription[]
   webhookEvents         WebhookEvent[]
   auditLogs             AuditLog[]
 
   @@index([status])
   @@index([commercialStatus])
   @@index([trialEndsAt])
+}
+
+model BillingSubscription {
+  id                     String          @id @default(cuid())
+  storeId                String
+  provider               BillingProvider @default(MERCADO_PAGO)
+  providerSubscriptionId String?         @unique
+  providerPlanId         String?
+  status                 BillingStatus   @default(TRIAL)
+  externalStatus         String?
+  initPoint              String?         @db.Text
+  checkoutUrl            String?         @db.Text
+  trialEndsAt            DateTime?
+  currentPeriodEnd       DateTime?
+  canceledAt             DateTime?
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
+  store                  Store           @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, status])
+  @@index([provider, providerSubscriptionId])
+  @@index([providerPlanId])
 }
 
 model Product {

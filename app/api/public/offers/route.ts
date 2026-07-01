@@ -1,6 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
 
-import { resolveStoreCommercialAccess, type CommercialStatus } from "@/src/lib/billing/commercial-status";
+import { getCommercialStatus, type CommercialStatus } from "@/src/lib/billing/commercial-status";
 import { decryptAccessTokenFromStorage } from "@/src/lib/nuvemshop/auth";
 import { prisma } from "@/src/lib/prisma";
 
@@ -433,9 +433,9 @@ export async function GET(request: NextRequest) {
       return offerNotFound();
     }
 
-    const commercialAccess = resolveStoreCommercialAccess(store);
+    const commercialAccess = await getCommercialStatus(store.storeId);
 
-    if (!commercialAccess.canDisplayWidget) {
+    if (!commercialAccess?.canDisplayWidget) {
       return offerNotFound();
     }
 

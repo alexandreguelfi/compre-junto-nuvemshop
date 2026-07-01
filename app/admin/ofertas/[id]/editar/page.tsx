@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 
 import { CommercialStatusBanner } from "@/app/admin/commercial-status-banner";
 import { ProductOfferForm, type ProductOfferInitialValues } from "@/app/admin/ofertas/nova/product-offer-form";
-import { resolveStoreCommercialAccess } from "@/src/lib/billing/commercial-status";
+import { getCommercialStatus } from "@/src/lib/billing/commercial-status";
 import { listConnectedStoreProducts } from "@/src/lib/nuvemshop/products";
 import { prisma } from "@/src/lib/prisma";
 import { getConnectedStore } from "@/src/lib/stores/current-store";
@@ -58,7 +58,7 @@ async function getOfferInitialValues(storeId: string, offerId: string): Promise<
 export default async function EditOfferPage({ params }: EditOfferPageProps) {
   const { id } = await params;
   const store = await getConnectedStore();
-  const commercialAccess = store ? resolveStoreCommercialAccess(store) : null;
+  const commercialAccess = store ? await getCommercialStatus(store.id) : null;
   const canEditOffer = Boolean(commercialAccess?.canCreateOffer);
   const initialValues = store ? await getOfferInitialValues(store.id, id) : null;
 

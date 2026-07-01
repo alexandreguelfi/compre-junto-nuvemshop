@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 import type { StoreCommercialAccess } from "@/src/lib/billing/commercial-status";
 
 type CommercialStatusBannerProps = {
@@ -5,7 +7,7 @@ type CommercialStatusBannerProps = {
 };
 
 export function CommercialStatusBanner({ access }: CommercialStatusBannerProps) {
-  const isBlocked = !access.canCreateOffer;
+  const isBlocked = access.enforcementEnabled && !access.canCreateOffer;
 
   return (
     <section
@@ -15,10 +17,21 @@ export function CommercialStatusBanner({ access }: CommercialStatusBannerProps) 
           : "rounded-md border border-emerald-200 bg-emerald-50 px-5 py-4 text-emerald-950"
       }
     >
-      <p className="text-sm font-semibold">
-        {access.planName} — {access.planPriceLabel}
-      </p>
-      <p className="mt-1 text-sm leading-6">{access.message}</p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-sm font-semibold">
+            {access.planName} - {access.planPriceLabel}
+          </p>
+          <p className="mt-1 text-xs font-semibold uppercase tracking-wide">{access.modeLabel}</p>
+        </div>
+        <Link
+          href="/admin/billing"
+          className="inline-flex h-8 items-center justify-center rounded-md border border-current px-3 text-xs font-semibold transition hover:bg-white/60"
+        >
+          Ver billing
+        </Link>
+      </div>
+      <p className="mt-2 text-sm leading-6">{access.message}</p>
     </section>
   );
 }
