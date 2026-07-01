@@ -41,7 +41,7 @@ export function BillingCheckoutAction({ defaultEmail, disabledReason }: BillingC
       const payload = (await response.json().catch(() => null)) as CheckoutResponse | null;
 
       if (!response.ok || !payload?.checkoutUrl) {
-        setMessage(payload?.error ?? "Nao conseguimos iniciar o pagamento agora. Tente novamente em alguns instantes.");
+        setMessage(payload?.error ?? "Não conseguimos iniciar o pagamento agora. Tente novamente em alguns instantes.");
         setIsSubmitting(false);
         return;
       }
@@ -49,7 +49,7 @@ export function BillingCheckoutAction({ defaultEmail, disabledReason }: BillingC
       setMessage("Tudo pronto. Abrindo o Mercado Pago...");
       window.location.href = payload.checkoutUrl;
     } catch {
-      setMessage("Nao conseguimos iniciar o pagamento agora. Tente novamente em alguns instantes.");
+      setMessage("Não conseguimos iniciar o pagamento agora. Tente novamente em alguns instantes.");
       setIsSubmitting(false);
     }
   }

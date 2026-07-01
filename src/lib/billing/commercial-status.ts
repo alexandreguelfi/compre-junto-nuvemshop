@@ -3,7 +3,7 @@ import { prisma } from "@/src/lib/prisma";
 export const COMPRE_JUNTO_PLAN = {
   name: "Compre Junto Pro",
   price: 49,
-  priceLabel: "R$ 49,00/mes",
+  priceLabel: "R$ 49,00/mês",
   trialDays: 7,
 } as const;
 
@@ -87,7 +87,7 @@ function readPositiveNumber(value: string | undefined, fallback: number): number
 }
 
 function formatPriceLabel(price: number): string {
-  return `R$ ${price.toFixed(2).replace(".", ",")}/mes`;
+  return `R$ ${price.toFixed(2).replace(".", ",")}/mês`;
 }
 
 function getTrialStartedAt(store: StoreCommercialFields, now: Date) {
@@ -109,7 +109,7 @@ function isTrialActive(now: Date, trialEndsAt: Date) {
 function formatTrialMessage(daysRemaining: number) {
   const unit = daysRemaining === 1 ? "dia restante" : "dias restantes";
 
-  return `Periodo gratis: ${daysRemaining} ${unit}.`;
+  return `Período grátis: ${daysRemaining} ${unit}.`;
 }
 
 function isActiveBillingStatus(status: BillingStatus) {
@@ -155,11 +155,11 @@ function getStatusMessage(args: {
   status: BillingStatus;
 }) {
   if (!args.enforcementEnabled && !args.hasEntitlement) {
-    return `Ambiente de validacao: acesso liberado enquanto finalizamos a assinatura. Status atual: ${args.status}.`;
+    return `Ambiente de validação: acesso liberado enquanto finalizamos a assinatura. Status atual: ${args.status}.`;
   }
 
   if (!args.enforcementEnabled) {
-    return `Ambiente de validacao: acesso liberado para testes. ${args.status === "TRIAL" ? formatTrialMessage(args.daysRemaining) : `${args.planName} ativo.`}`;
+    return `Ambiente de validação: acesso liberado para testes. ${args.status === "TRIAL" ? formatTrialMessage(args.daysRemaining) : `${args.planName} ativo.`}`;
   }
 
   if (args.status === "ACTIVE") {
