@@ -22,7 +22,7 @@ Fluxo no storefront:
 
 O fallback diagnostico nao foi removido: ele aparece apenas em modo seguro/dev, por exemplo com `cj_debug=1`, `compre_junto_debug=1`, `nubesdk_debug=1` ou em localhost. Se nao houver oferta ativa em modo normal, o bundle nao renderiza bloco.
 
-O CTA atual abre o produto recomendado quando ha URL/path disponivel. O botao de adicionar o conjunto ao carrinho ainda nao foi habilitado porque o repositorio nao possui endpoint proprio para isso e o payload `cart:add` para dois itens ainda nao foi validado no PDP.
+O CTA de fallback abre o produto recomendado quando ha URL/path disponivel. A primeira versao do botao `Adicionar conjunto ao carrinho` usa o evento oficial NubeSDK `cart:add`, sem endpoint proprio e sem manipulacao direta de DOM.
 
 ## Validacao producao pos-3eda2ef
 
@@ -95,6 +95,55 @@ Conclusao desta validacao: o Railway esta servindo o bundle dinamico correto e o
 ```text
 https://compre-junto-nuvemshop-production.up.railway.app/nube/compre-junto.js?v=3eda2ef
 ```
+
+## Checkpoint dinamico com onfirst
+
+Em 2026-07-01, depois de recriar o app script do zero no Partner Portal com o evento correto `onfirst`, o PDP abaixo passou a renderizar a versao dinamica real do Compre Junto NubeSDK:
+
+```text
+https://lojadedemonstracaodeaplic2.lojavirtualnuvem.com.br/produtos/produto-a-1dgkr/
+```
+
+Resultado visual confirmado:
+
+- bloco `Compre junto`;
+- produto principal `Produto A` com preco `R$10,00`;
+- produto recomendado `Produto B` com preco `R$90,00`;
+- preco combinado `R$100,00`;
+- CTA anterior `Ver produto recomendado`.
+
+Oferta publica confirmada:
+
+- `productId`: `352962585`;
+- `storeId`: `7901767`;
+- produto recomendado: `352962686`;
+- variacao recomendada: `1550778182`;
+- `imageUrl`: `null`, porque o Produto B esta sem imagem cadastrada na loja teste.
+
+## Carrinho conjunto NubeSDK
+
+Investigacao tecnica:
+
+- o NubeSDK executa em Web Worker isolado, sem acesso direto ao DOM da loja;
+- a API/evento oficial para adicionar item ao carrinho e `nube.send("cart:add", ...)`;
+- o payload documentado usa `cart.items`, com `variant_id`, `product_id`, `quantity` e `properties` opcional;
+- os eventos de retorno sao `cart:add:success` e `cart:add:fail`;
+- nao foi criado endpoint novo no app para adicionar ao carrinho.
+
+Referencia oficial consultada:
+
+```text
+https://dev.tiendanube.com/docs/applications/nube-sdk/events/cart
+```
+
+Implementacao inicial:
+
+- o botao `Adicionar conjunto ao carrinho` so aparece quando produto principal e recomendado possuem `productId` e `variantId` numericos;
+- o payload envia primeiro Produto A e depois Produto B no array `cart.items`, ambos com `quantity: 1`;
+- enquanto aguarda retorno, o botao mostra `Adicionando...` e fica desabilitado;
+- em sucesso, mostra `Conjunto adicionado ao carrinho.`;
+- em falha ou timeout de confirmacao, mostra mensagem discreta e mantem o link `Ver produto recomendado`;
+- o link para o produto recomendado continua renderizando como fallback quando ha URL/path.
 
 ## URL publica do NubeSDK
 
@@ -267,4 +316,7 @@ Esse formato segue o template usado para gerar bundle NubeSDK com `tsup` em ESM.
 Compre junto
 ```
 
-5. Se precisar diagnosticar sem oferta ativa, use uma URL com `?cj_debug=1` e procure pelo bloco `Compre Junto NubeSDK em modo diagnostico`.
+5. Confirme que o bloco exibe produto principal, produto recomendado e preco combinado.
+6. Clique em `Adicionar conjunto ao carrinho` e confirme que o carrinho recebe as duas variacoes com quantidade 1.
+7. Se o evento de carrinho falhar, confirme que o link `Ver produto recomendado` continua visivel.
+8. Se precisar diagnosticar sem oferta ativa, use uma URL com `?cj_debug=1` e procure pelo bloco `Compre Junto NubeSDK em modo diagnostico`.

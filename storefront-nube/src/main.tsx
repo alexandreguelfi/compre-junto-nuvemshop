@@ -1,10 +1,11 @@
-import type { NubeComponent, NubeSDK, ProductDetails, ProductVariant } from "@tiendanube/nube-sdk-types";
+import type { NubeComponent, NubeSDK, NubeSDKState, ProductDetails, ProductVariant } from "@tiendanube/nube-sdk-types";
 
 const BLOCK_ID = "compre-junto-nubesdk-onload-test";
 const TARGET_SLOT = "after_product_detail_add_to_cart";
 const FALLBACK_DELAY_MS = 1200;
 const APP_ORIGIN = "https://compre-junto-nuvemshop-production.up.railway.app";
 const PUBLIC_OFFERS_URL = `${APP_ORIGIN}/api/public/offers`;
+const CART_ADD_TIMEOUT_MS = 8000;
 
 const DEBUG_QUERY_KEYS = ["cj_debug", "compre_junto_debug", "nubesdk_debug"] as const;
 
@@ -65,8 +66,29 @@ type PublicOfferResponse = {
   } | null;
 };
 
+type BundleCartItemPayload = {
+  product_id: number;
+  quantity: number;
+  variant_id: number;
+};
+
+type CartItemExpectation = BundleCartItemPayload;
+
+type ActiveOffer = {
+  context: ProductContext;
+  suggestedProduct: ProductCardData;
+};
+
+type CartAddStatus = "idle" | "loading" | "success" | "error";
+
 let renderStarted = false;
 let warningLogged = false;
+let cartListenersRegistered = false;
+let activeOffer: ActiveOffer | null = null;
+let cartAddStatus: CartAddStatus = "idle";
+let cartStatusMessage: string | null = null;
+let cartAddTimeout: ReturnType<typeof setTimeout> | undefined;
+let pendingCartItems: CartItemExpectation[] | null = null;
 
 function getBrowserGlobals() {
   return globalThis as unknown as BrowserGlobals;
@@ -82,6 +104,10 @@ function box(props: Record<string, unknown>) {
 
 function image(props: Record<string, unknown>) {
   return component({ type: "img", ...props });
+}
+
+function button(props: Record<string, unknown>) {
+  return component({ type: "button", ...props });
 }
 
 function link(props: Record<string, unknown>) {
@@ -208,6 +234,16 @@ function normalizeHref(path: string | null | undefined, url: string | null | und
   }
 
   return null;
+}
+
+function parsePositiveInteger(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = Number(value);
+
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 function readProductContext(nube: NubeSDK): ProductContext | null {
@@ -393,7 +429,235 @@ function createProductLine(label: string, product: ProductCardData): NubeCompone
   });
 }
 
-function createOfferBlock(context: ProductContext, suggestedProduct: ProductCardData): NubeComponent {
+function getBundleCartItems(context: ProductContext, suggestedProduct: ProductCardData): BundleCartItemPayload[] | null {
+  const mainProductId = parsePositiveInteger(context.mainProduct.productId);
+  const mainVariantId = parsePositiveInteger(context.mainProduct.variantId);
+  const suggestedProductId = parsePositiveInteger(suggestedProduct.productId);
+  const suggestedVariantId = parsePositiveInteger(suggestedProduct.variantId);
+
+  if (!mainProductId || !mainVariantId || !suggestedProductId || !suggestedVariantId) {
+    return null;
+  }
+
+  return [
+    {
+      product_id: mainProductId,
+      quantity: 1,
+      variant_id: mainVariantId,
+    },
+    {
+      product_id: suggestedProductId,
+      quantity: 1,
+      variant_id: suggestedVariantId,
+    },
+  ];
+}
+
+function clearCartAddTimeout() {
+  if (!cartAddTimeout) {
+    return;
+  }
+
+  clearTimeout(cartAddTimeout);
+  cartAddTimeout = undefined;
+}
+
+function getCartItemQuantity(state: Readonly<NubeSDKState>, item: BundleCartItemPayload) {
+  const cartItems = Array.isArray(state.cart.items) ? state.cart.items : [];
+
+  return cartItems.reduce((quantity, cartItem) => {
+    if (
+      Number(cartItem.product_id) === item.product_id &&
+      Number(cartItem.variant_id) === item.variant_id
+    ) {
+      return quantity + cartItem.quantity;
+    }
+
+    return quantity;
+  }, 0);
+}
+
+function getCartItemExpectations(state: Readonly<NubeSDKState>, items: BundleCartItemPayload[]): CartItemExpectation[] {
+  return items.map((item) => ({
+    ...item,
+    quantity: getCartItemQuantity(state, item) + item.quantity,
+  }));
+}
+
+function cartContainsExpectedItems(state: Readonly<NubeSDKState>, items: CartItemExpectation[]) {
+  const cartItems = Array.isArray(state.cart.items) ? state.cart.items : [];
+
+  return items.every((item) => {
+    const quantity = cartItems.reduce((total, cartItem) => {
+      if (
+        Number(cartItem.product_id) === item.product_id &&
+        Number(cartItem.variant_id) === item.variant_id
+      ) {
+        return total + cartItem.quantity;
+      }
+
+      return total;
+    }, 0);
+
+    return quantity >= item.quantity;
+  });
+}
+
+function renderActiveOffer(nube: NubeSDK) {
+  if (!activeOffer) {
+    return;
+  }
+
+  nube.render(TARGET_SLOT, createOfferBlock(nube, activeOffer.context, activeOffer.suggestedProduct));
+}
+
+function setCartStatus(nube: NubeSDK, status: CartAddStatus, message: string | null) {
+  cartAddStatus = status;
+  cartStatusMessage = message;
+  renderActiveOffer(nube);
+}
+
+function handleCartAddTimeout(nube: NubeSDK) {
+  if (cartAddStatus !== "loading") {
+    return;
+  }
+
+  pendingCartItems = null;
+  setCartStatus(nube, "error", "Nao foi possivel confirmar o carrinho. Use o link abaixo para continuar.");
+}
+
+function addBundleToCart(nube: NubeSDK, context: ProductContext, suggestedProduct: ProductCardData) {
+  if (cartAddStatus === "loading") {
+    return;
+  }
+
+  const items = getBundleCartItems(context, suggestedProduct);
+
+  if (!items) {
+    setCartStatus(nube, "error", "Nao foi possivel adicionar o conjunto. Use o link abaixo para continuar.");
+    return;
+  }
+
+  clearCartAddTimeout();
+  activeOffer = { context, suggestedProduct };
+
+  try {
+    pendingCartItems = getCartItemExpectations(nube.getState(), items);
+  } catch {
+    pendingCartItems = items;
+  }
+
+  cartAddStatus = "loading";
+  cartStatusMessage = null;
+  renderActiveOffer(nube);
+
+  cartAddTimeout = setTimeout(() => handleCartAddTimeout(nube), CART_ADD_TIMEOUT_MS);
+
+  try {
+    nube.send("cart:add", () => ({
+      cart: {
+        items,
+      },
+    }));
+  } catch {
+    clearCartAddTimeout();
+    pendingCartItems = null;
+    setCartStatus(nube, "error", "Nao foi possivel adicionar o conjunto. Use o link abaixo para continuar.");
+  }
+}
+
+function registerCartListeners(nube: NubeSDK) {
+  if (cartListenersRegistered) {
+    return;
+  }
+
+  cartListenersRegistered = true;
+
+  nube.on("cart:add:success", (state) => {
+    if (cartAddStatus !== "loading" || !activeOffer) {
+      return;
+    }
+
+    if (!pendingCartItems || !cartContainsExpectedItems(state, pendingCartItems)) {
+      return;
+    }
+
+    clearCartAddTimeout();
+    pendingCartItems = null;
+    setCartStatus(nube, "success", "Conjunto adicionado ao carrinho.");
+  });
+
+  nube.on("cart:add:fail", () => {
+    if (cartAddStatus !== "loading") {
+      return;
+    }
+
+    clearCartAddTimeout();
+    pendingCartItems = null;
+    setCartStatus(nube, "error", "Nao foi possivel adicionar o conjunto. Use o link abaixo para continuar.");
+  });
+}
+
+function createCartActions(nube: NubeSDK, context: ProductContext, suggestedProduct: ProductCardData): NubeComponent[] {
+  const children: NubeComponent[] = [];
+  const canAddBundle = getBundleCartItems(context, suggestedProduct) !== null;
+  const suggestedHref = suggestedProduct.url ? normalizeHref(null, suggestedProduct.url) : null;
+
+  if (canAddBundle) {
+    const buttonLabel =
+      cartAddStatus === "loading"
+        ? "Adicionando..."
+        : cartAddStatus === "success"
+          ? "Conjunto adicionado"
+          : cartAddStatus === "error"
+            ? "Tentar adicionar conjunto"
+            : "Adicionar conjunto ao carrinho";
+
+    children.push(
+      button({
+        ariaLabel: buttonLabel,
+        children: buttonLabel,
+        disabled: cartAddStatus === "loading" || cartAddStatus === "success",
+        onClick: () => addBundleToCart(nube, context, suggestedProduct),
+        variant: "primary",
+        width: "100%",
+        style: {
+          marginTop: "4px",
+        },
+      }),
+    );
+  }
+
+  if (cartStatusMessage) {
+    children.push(
+      text({
+        children: cartStatusMessage,
+        color: cartAddStatus === "success" ? "#15803d" : "#71717a",
+        style: {
+          fontSize: "12px",
+          margin: 0,
+        },
+      }),
+    );
+  }
+
+  if (suggestedHref) {
+    children.push(
+      link({
+        children: "Ver produto recomendado",
+        href: suggestedHref,
+        variant: canAddBundle ? "secondary" : "primary",
+        style: {
+          marginTop: canAddBundle ? 0 : "4px",
+        },
+      }),
+    );
+  }
+
+  return children;
+}
+
+function createOfferBlock(nube: NubeSDK, context: ProductContext, suggestedProduct: ProductCardData): NubeComponent {
   const combinedAmount =
     context.mainProduct.price.amount !== null && suggestedProduct.price.amount !== null
       ? context.mainProduct.price.amount + suggestedProduct.price.amount
@@ -402,7 +666,6 @@ function createOfferBlock(context: ProductContext, suggestedProduct: ProductCard
     (context.mainProduct.compareAtPrice.amount ?? context.mainProduct.price.amount ?? 0) +
     (suggestedProduct.compareAtPrice.amount ?? suggestedProduct.price.amount ?? 0);
   const savingsAmount = combinedAmount !== null && compareAmount > combinedAmount ? compareAmount - combinedAmount : null;
-  const suggestedHref = suggestedProduct.url ? normalizeHref(null, suggestedProduct.url) : null;
   const children: NubeComponent[] = [
     text({
       children: "Compre junto",
@@ -466,18 +729,7 @@ function createOfferBlock(context: ProductContext, suggestedProduct: ProductCard
     );
   }
 
-  if (suggestedHref) {
-    children.push(
-      link({
-        children: "Ver produto recomendado",
-        href: suggestedHref,
-        variant: "primary",
-        style: {
-          marginTop: "4px",
-        },
-      }),
-    );
-  }
+  children.push(...createCartActions(nube, context, suggestedProduct));
 
   return box({
     background: "#ffffff",
@@ -579,7 +831,12 @@ async function renderDynamicWidget(nube: NubeSDK) {
       return;
     }
 
-    nube.render(TARGET_SLOT, createOfferBlock(context, suggestedProduct));
+    activeOffer = { context, suggestedProduct };
+    cartAddStatus = "idle";
+    cartStatusMessage = null;
+    pendingCartItems = null;
+    clearCartAddTimeout();
+    nube.render(TARGET_SLOT, createOfferBlock(nube, context, suggestedProduct));
   } catch {
     renderStarted = false;
     logWarningOnce("dynamic_render_failed");
@@ -613,6 +870,8 @@ function scheduleAfterCriticalPaint(render: () => void) {
 }
 
 export function App(nube: NubeSDK) {
+  registerCartListeners(nube);
+
   scheduleAfterCriticalPaint(() => {
     void renderDynamicWidget(nube);
   });
