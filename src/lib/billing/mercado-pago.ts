@@ -35,7 +35,7 @@ export type BillingCheckout = {
 export class MercadoPagoBillingError extends Error {
   constructor(
     message: string,
-    readonly safeDetails: Record<string, string | number | boolean | null> = {},
+    readonly safeDetails: Record<string, unknown> = {},
     readonly status = 500,
   ) {
     super(message);
@@ -45,6 +45,39 @@ export class MercadoPagoBillingError extends Error {
 
 function cleanString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function isSensitiveKey(key: string) {
+  return /token|secret|authorization|password|card|cvv|security/i.test(key);
+}
+
+export function sanitizeForSafeLog(value: unknown, depth = 0): unknown {
+  if (depth > 4) {
+    return "[truncated]";
+  }
+
+  if (value === null || typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    return value.length > 500 ? `${value.slice(0, 500)}...` : value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.slice(0, 10).map((item) => sanitizeForSafeLog(item, depth + 1));
+  }
+
+  if (typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+        key,
+        isSensitiveKey(key) ? "[redacted]" : sanitizeForSafeLog(item, depth + 1),
+      ]),
+    );
+  }
+
+  return null;
 }
 
 function cleanEmail(value: unknown): string | null {
@@ -128,9 +161,12 @@ async function mercadoPagoRequest(path: string, init: RequestInit) {
 
   if (!response.ok) {
     throw new MercadoPagoBillingError("Mercado Pago request failed.", {
+      cause: sanitizeForSafeLog(payload?.cause) ?? null,
       endpoint: path,
+      error: cleanString(payload?.error),
       httpStatus: response.status,
-      responseMessage: cleanString(payload?.message) ?? cleanString(payload?.error) ?? null,
+      message: cleanString(payload?.message),
+      responseBody: sanitizeForSafeLog(payload),
     }, response.status >= 400 && response.status < 500 ? 502 : 503);
   }
 

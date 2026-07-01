@@ -52,13 +52,17 @@ Status internos:
 
 A rota `POST /api/mercadopago/webhook` recebe eventos do Mercado Pago.
 
+Simulacoes do painel do Mercado Pago com `live_mode=false` sao aceitas quando o payload tem `type`, `action` e `data.id`. Elas retornam 200, registram log seguro e nao tentam sincronizar uma assinatura real.
+
 Com `MERCADOPAGO_WEBHOOK_SECRET` configurado, a rota valida:
 
 - header `x-signature`;
 - header `x-request-id`;
 - `data.id` da notificacao.
 
-Depois da validacao, a rota consulta `GET https://api.mercadopago.com/preapproval/{id}` antes de atualizar o status local. O payload recebido nao e usado como fonte final de verdade.
+Depois da validacao, eventos reais `subscription_preapproval` consultam `GET https://api.mercadopago.com/preapproval/{id}` antes de atualizar o status local. O payload recebido nao e usado como fonte final de verdade.
+
+Eventos reais `payment`, `subscription_preapproval_plan` e `subscription_authorized_payment` sao reconhecidos e gravados com seguranca, mas nao alteram a assinatura local nesta etapa. Eventos desconhecidos com payload valido tambem recebem 200 para evitar retentativas desnecessarias.
 
 Eventos sao registrados em `WebhookEvent` com `provider=mercado_pago`, sem tokens ou dados de cartao.
 
