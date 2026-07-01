@@ -21,7 +21,6 @@ type IdleCallbackOptions = {
 type IdleCallback = (callback: (deadline: IdleDeadline) => void, options?: IdleCallbackOptions) => unknown;
 
 type BrowserGlobals = typeof globalThis & {
-  document?: Document;
   location?: Location;
   requestIdleCallback?: IdleCallback;
 };
@@ -218,22 +217,22 @@ function getPrimaryImageUrl(product: ProductDetails) {
   return product.images?.[0]?.src ?? null;
 }
 
-function normalizeHref(path: string | null | undefined, url: string | null | undefined) {
-  if (path?.startsWith("/")) {
-    return path;
+function normalizeHref(url: string | null | undefined) {
+  if (!url) {
+    return null;
   }
 
-  if (url) {
-    try {
-      const parsedUrl = new URL(url);
-
-      return `${parsedUrl.pathname}${parsedUrl.search}${parsedUrl.hash}` || url;
-    } catch {
-      return url;
-    }
+  if (url.startsWith("/")) {
+    return url;
   }
 
-  return null;
+  try {
+    const parsedUrl = new URL(url);
+
+    return `${parsedUrl.pathname}${parsedUrl.search}${parsedUrl.hash}` || url;
+  } catch {
+    return url;
+  }
 }
 
 function parsePositiveInteger(value: string | null | undefined) {
@@ -485,22 +484,7 @@ function getCartItemExpectations(state: Readonly<NubeSDKState>, items: BundleCar
 }
 
 function cartContainsExpectedItems(state: Readonly<NubeSDKState>, items: CartItemExpectation[]) {
-  const cartItems = Array.isArray(state.cart.items) ? state.cart.items : [];
-
-  return items.every((item) => {
-    const quantity = cartItems.reduce((total, cartItem) => {
-      if (
-        Number(cartItem.product_id) === item.product_id &&
-        Number(cartItem.variant_id) === item.variant_id
-      ) {
-        return total + cartItem.quantity;
-      }
-
-      return total;
-    }, 0);
-
-    return quantity >= item.quantity;
-  });
+  return items.every((item) => getCartItemQuantity(state, item) >= item.quantity);
 }
 
 function renderActiveOffer(nube: NubeSDK) {
@@ -526,15 +510,13 @@ function handleCartAddTimeout(nube: NubeSDK) {
   setCartStatus(nube, "error", "Nao foi possivel confirmar o carrinho. Use o link abaixo para continuar.");
 }
 
-function addBundleToCart(nube: NubeSDK, context: ProductContext, suggestedProduct: ProductCardData) {
+function addBundleToCart(
+  nube: NubeSDK,
+  context: ProductContext,
+  suggestedProduct: ProductCardData,
+  items: BundleCartItemPayload[],
+) {
   if (cartAddStatus === "loading") {
-    return;
-  }
-
-  const items = getBundleCartItems(context, suggestedProduct);
-
-  if (!items) {
-    setCartStatus(nube, "error", "Nao foi possivel adicionar o conjunto. Use o link abaixo para continuar.");
     return;
   }
 
@@ -598,10 +580,15 @@ function registerCartListeners(nube: NubeSDK) {
   });
 }
 
-function createCartActions(nube: NubeSDK, context: ProductContext, suggestedProduct: ProductCardData): NubeComponent[] {
+function createCartActions(
+  nube: NubeSDK,
+  context: ProductContext,
+  suggestedProduct: ProductCardData,
+  cartItems: BundleCartItemPayload[] | null,
+): NubeComponent[] {
   const children: NubeComponent[] = [];
-  const canAddBundle = getBundleCartItems(context, suggestedProduct) !== null;
-  const suggestedHref = suggestedProduct.url ? normalizeHref(null, suggestedProduct.url) : null;
+  const canAddBundle = cartItems !== null;
+  const suggestedHref = normalizeHref(suggestedProduct.url);
 
   if (canAddBundle) {
     const buttonLabel =
@@ -618,7 +605,7 @@ function createCartActions(nube: NubeSDK, context: ProductContext, suggestedProd
         ariaLabel: buttonLabel,
         children: buttonLabel,
         disabled: cartAddStatus === "loading" || cartAddStatus === "success",
-        onClick: () => addBundleToCart(nube, context, suggestedProduct),
+        onClick: () => addBundleToCart(nube, context, suggestedProduct, cartItems),
         variant: "primary",
         width: "100%",
         style: {
@@ -658,6 +645,7 @@ function createCartActions(nube: NubeSDK, context: ProductContext, suggestedProd
 }
 
 function createOfferBlock(nube: NubeSDK, context: ProductContext, suggestedProduct: ProductCardData): NubeComponent {
+  const cartItems = getBundleCartItems(context, suggestedProduct);
   const combinedAmount =
     context.mainProduct.price.amount !== null && suggestedProduct.price.amount !== null
       ? context.mainProduct.price.amount + suggestedProduct.price.amount
@@ -729,7 +717,7 @@ function createOfferBlock(nube: NubeSDK, context: ProductContext, suggestedProdu
     );
   }
 
-  children.push(...createCartActions(nube, context, suggestedProduct));
+  children.push(...createCartActions(nube, context, suggestedProduct, cartItems));
 
   return box({
     background: "#ffffff",
@@ -769,15 +757,11 @@ function normalizeSuggestedProduct(context: ProductContext, response: PublicOffe
 }
 
 async function fetchOffer(context: ProductContext): Promise<PublicOfferResponse> {
-  const url = new URL(PUBLIC_OFFERS_URL);
+  const url = `${PUBLIC_OFFERS_URL}?productId=${context.mainProduct.productId}${
+    context.storeId ? `&storeId=${context.storeId}` : ""
+  }`;
 
-  url.searchParams.set("productId", context.mainProduct.productId);
-
-  if (context.storeId) {
-    url.searchParams.set("storeId", context.storeId);
-  }
-
-  const response = await fetch(url.toString(), {
+  const response = await fetch(url, {
     cache: "no-store",
   });
 
@@ -836,6 +820,7 @@ async function renderDynamicWidget(nube: NubeSDK) {
     cartStatusMessage = null;
     pendingCartItems = null;
     clearCartAddTimeout();
+    registerCartListeners(nube);
     nube.render(TARGET_SLOT, createOfferBlock(nube, context, suggestedProduct));
   } catch {
     renderStarted = false;
@@ -870,8 +855,6 @@ function scheduleAfterCriticalPaint(render: () => void) {
 }
 
 export function App(nube: NubeSDK) {
-  registerCartListeners(nube);
-
   scheduleAfterCriticalPaint(() => {
     void renderDynamicWidget(nube);
   });

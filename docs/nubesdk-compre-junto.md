@@ -374,3 +374,27 @@ Pendências futuras:
 - Adicionar imagem no Produto B para melhorar a apresentação visual.
 - Revisar otimização de performance do bundle, pois a Nuvemshop aprovou o script, mas informou que o impacto ficou no limite.
 - Melhorar visual/UX do widget antes da homologação final.
+
+## Checkpoint - Otimizacao do bundle NubeSDK
+
+Data: 01/07/2026
+
+Objetivo:
+- Reduzir peso e trabalho inicial do bundle NubeSDK sem alterar o fluxo funcional validado.
+
+Otimizacoes aplicadas:
+- Os listeners de `cart:add:success` e `cart:add:fail` passaram a ser registrados apenas depois que existe oferta ativa renderizavel.
+- A montagem do payload do conjunto passou a ser reaproveitada no render e no clique, evitando recomputacao desnecessaria.
+- A URL de `/api/public/offers` passou a ser montada diretamente com `productId` e `storeId`, removendo uso de `URL`/`searchParams` no caminho de consulta.
+- A verificacao de sucesso do carrinho reaproveita uma funcao unica de quantidade por item.
+- O fallback diagnostico continua restrito a modo debug/dev.
+
+Tamanho do bundle:
+- Baseline medido: `8.591` bytes.
+- Tamanho final de `public/nube/compre-junto.js`: `8.266` bytes.
+- Reducao: `325` bytes.
+
+Marcadores preservados no bundle:
+- `cart:add`;
+- `Adicionar conjunto ao carrinho`;
+- `Ver produto recomendado`.
