@@ -3,27 +3,26 @@
 Esta e a implementacao paralela do widget Compre Junto para storefront via NubeSDK.
 O widget legado em `/widget/compre-junto.js` continua existindo apenas como fallback/demo.
 
-## Modo diagnostico atual
+## Comportamento dinamico atual
 
-O bundle publico esta temporariamente em modo diagnostico perf-safe para validar entrega, cache e montagem no PDP.
+O bundle publico em `/nube/compre-junto.js` agora renderiza a oferta ativa de Compre Junto no PDP.
 
-Texto renderizado no bloco diagnostico:
+Fluxo no storefront:
 
-```text
-Compre Junto NubeSDK onload #841a480 ativado
-Render diagnostico com fallback direto no PDP
-```
-
-Caracteristicas do bundle atual:
-
-- nao chama fetch/API;
-- nao depende de `productId`, `storeId` ou oferta cadastrada;
+- le o produto atual pelo contexto NubeSDK (`location.page.data.product`);
+- le a loja atual pelo contexto NubeSDK (`store.id`);
+- busca a oferta ativa em `GET /api/public/offers?productId=...&storeId=...`;
+- renderiza produto principal, produto recomendado, precos individuais e preco combinado quando os precos estao disponiveis;
 - tenta primeiro o slot NubeSDK `after_product_detail_add_to_cart`;
 - usa `requestIdleCallback` quando disponivel;
 - usa fallback real com `setTimeout(..., 1200)`;
-- usa fallback DOM direto no PDP quando o slot nao materializa o bloco;
 - evita duplicidade pelo id `compre-junto-nubesdk-onload-test`;
-- nao usa logs repetitivos, polling agressivo ou `MutationObserver`.
+- preserva logs pontuais sem tokens/secrets em falhas de consulta/renderizacao;
+- nao usa polling agressivo ou `MutationObserver`.
+
+O fallback diagnostico nao foi removido: ele aparece apenas em modo seguro/dev, por exemplo com `cj_debug=1`, `compre_junto_debug=1`, `nubesdk_debug=1` ou em localhost. Se nao houver oferta ativa em modo normal, o bundle nao renderiza bloco.
+
+O CTA atual abre o produto recomendado quando ha URL/path disponivel. O botao de adicionar o conjunto ao carrinho ainda nao foi habilitado porque o repositorio nao possui endpoint proprio para isso e o payload `cart:add` para dois itens ainda nao foi validado no PDP.
 
 ## URL publica do NubeSDK
 
@@ -39,7 +38,7 @@ URL versionada recomendada para forcar refresh de cache da Nuvemshop/CDN quando 
 https://compre-junto-nuvemshop-production.up.railway.app/nube/compre-junto.js?v=841a480
 ```
 
-Em 2026-07-01, as duas URLs responderam HTTP 200 no Railway e continham:
+Em 2026-07-01, as duas URLs responderam HTTP 200 no Railway e continham a versao diagnostica usada no checkpoint:
 
 ```text
 Compre Junto NubeSDK onload #841a480 ativado
@@ -120,6 +119,43 @@ Render diagnostico com fallback direto no PDP
 
 Conclusao do checkpoint: o problema anterior nao estava no Railway, no arquivo publico `/nube/compre-junto.js` ou na renderizacao basica do bundle. A causa era a versao NubeSDK atualizada criada no portal, mas ainda sem ativacao/publicacao efetiva para a loja teste.
 
+## Endpoint publico de ofertas
+
+O storefront consulta:
+
+```text
+GET /api/public/offers?productId=<produto-principal>&storeId=<loja>
+```
+
+Resposta esperada quando existe oferta ativa:
+
+```json
+{
+  "offer": {
+    "principalProductId": "123",
+    "suggestedProduct": {
+      "id": "456",
+      "name": "Produto complementar",
+      "path": "/produtos/produto-complementar/",
+      "url": "https://loja/produtos/produto-complementar/",
+      "imageUrl": "https://...",
+      "variantId": "789",
+      "price": "29.90",
+      "compareAtPrice": null,
+      "promotionalPrice": null
+    }
+  }
+}
+```
+
+Quando nao ha oferta ativa, a resposta segue:
+
+```json
+{
+  "offer": null
+}
+```
+
 ## Build
 
 ```bash
@@ -153,10 +189,10 @@ Esse formato segue o template usado para gerar bundle NubeSDK com `tsup` em ESM.
 1. Confirme que o app script ativo aponta para o bundle NubeSDK publico.
 2. Acesse uma pagina de produto, por exemplo `/produtos/.../`.
 3. Se o app script estiver configurado como `onfirstinteraction`, interaja com a pagina para disparar o script.
-4. Procure pelo texto:
+4. Com oferta ativa cadastrada para o produto principal, procure pelo titulo:
 
 ```text
-Compre Junto NubeSDK onload #841a480 ativado
+Compre junto
 ```
 
-5. Se o texto existir no bundle do Railway mas nao aparecer na loja, investigar cache/entrega da Nuvemshop/CDN/storefront e a montagem do NubeSDK no tema.
+5. Se precisar diagnosticar sem oferta ativa, use uma URL com `?cj_debug=1` e procure pelo bloco `Compre Junto NubeSDK em modo diagnostico`.
