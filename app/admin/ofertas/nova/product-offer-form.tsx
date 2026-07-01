@@ -6,13 +6,27 @@ import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { NuvemshopAdminProduct } from "@/src/lib/nuvemshop/products";
 
 type ProductOfferFormProps = {
+  action?: string;
+  initialValues?: ProductOfferInitialValues;
+  submitLabel?: string;
+  submitMethod?: "POST" | "PATCH";
+  submittingLabel?: string;
   products: NuvemshopAdminProduct[];
   productsLoadFailed: boolean;
+  successRedirect?: string;
 };
 
 type FormMessage = {
   kind: "error" | "success";
   text: string;
+};
+
+export type ProductOfferInitialValues = {
+  isActive: boolean;
+  suggestedProductId: string;
+  suggestedProductName: string;
+  triggerProductId: string;
+  triggerProductName: string;
 };
 
 const OFFER_FORM_MESSAGES = {
@@ -36,18 +50,20 @@ function ProductSelect({
   label,
   onSelect,
   products,
+  value,
 }: {
   label: string;
   onSelect: (productId: string) => void;
   products: NuvemshopAdminProduct[];
+  value: string;
 }) {
   return (
     <label className="grid gap-2 text-sm font-medium text-zinc-800">
       {label}
       <select
-        defaultValue=""
         disabled={products.length === 0}
         onChange={(event) => onSelect(event.target.value)}
+        value={value}
         className="h-10 rounded-md border border-zinc-300 px-3 text-sm outline-none focus:border-zinc-900 disabled:bg-zinc-100 disabled:text-zinc-500"
       >
         <option value="">Selecionar produto</option>
@@ -61,11 +77,21 @@ function ProductSelect({
   );
 }
 
-export function ProductOfferForm({ products, productsLoadFailed }: ProductOfferFormProps) {
-  const [suggestedProductId, setSuggestedProductId] = useState("");
-  const [suggestedProductName, setSuggestedProductName] = useState("");
-  const [triggerProductId, setTriggerProductId] = useState("");
-  const [triggerProductName, setTriggerProductName] = useState("");
+export function ProductOfferForm({
+  action = "/api/admin/ofertas",
+  initialValues,
+  products,
+  productsLoadFailed,
+  submitLabel = "Salvar oferta",
+  submitMethod = "POST",
+  submittingLabel = "Salvando...",
+  successRedirect = "/admin/ofertas?created=1",
+}: ProductOfferFormProps) {
+  const [suggestedProductId, setSuggestedProductId] = useState(initialValues?.suggestedProductId ?? "");
+  const [suggestedProductName, setSuggestedProductName] = useState(initialValues?.suggestedProductName ?? "");
+  const [triggerProductId, setTriggerProductId] = useState(initialValues?.triggerProductId ?? "");
+  const [triggerProductName, setTriggerProductName] = useState(initialValues?.triggerProductName ?? "");
+  const [isActive, setIsActive] = useState(initialValues?.isActive ?? true);
   const [message, setMessage] = useState<FormMessage | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const messageRef = useRef<HTMLDivElement | null>(null);
@@ -175,7 +201,7 @@ export function ProductOfferForm({ products, productsLoadFailed }: ProductOfferF
     try {
       const response = await fetch(form.action, {
         body: formData,
-        method: "POST",
+        method: submitMethod,
       });
 
       if (response.redirected) {
@@ -184,7 +210,7 @@ export function ProductOfferForm({ products, productsLoadFailed }: ProductOfferF
         return;
       }
 
-      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+      const payload = (await response.json().catch(() => null)) as { error?: string; redirect?: string } | null;
 
       if (!response.ok) {
         setMessage({
@@ -196,7 +222,7 @@ export function ProductOfferForm({ products, productsLoadFailed }: ProductOfferF
       }
 
       setMessage({ kind: "success", text: OFFER_FORM_MESSAGES.saved });
-      window.location.href = "/admin/ofertas?created=1";
+      window.location.href = payload?.redirect ?? successRedirect;
     } catch {
       setMessage({ kind: "error", text: OFFER_FORM_MESSAGES.saveFailedRetry });
       setIsSubmitting(false);
@@ -204,7 +230,7 @@ export function ProductOfferForm({ products, productsLoadFailed }: ProductOfferF
   }
 
   return (
-    <form action="/api/admin/ofertas" method="post" noValidate onSubmit={handleSubmit} className="mt-8 grid gap-6">
+    <form action={action} method="post" noValidate onSubmit={handleSubmit} className="mt-8 grid gap-6">
       {message ? (
         <div
           aria-live="polite"
@@ -227,7 +253,12 @@ export function ProductOfferForm({ products, productsLoadFailed }: ProductOfferF
           <p className="mt-1 text-sm leading-6 text-zinc-600">{productsStatusText}</p>
         </div>
         {hasProducts ? (
-          <ProductSelect label="Escolher produto sugerido" onSelect={selectSuggestedProduct} products={products} />
+          <ProductSelect
+            label="Escolher produto sugerido"
+            onSelect={selectSuggestedProduct}
+            products={products}
+            value={suggestedProductId}
+          />
         ) : null}
         <label className="grid gap-2 text-sm font-medium text-zinc-800">
           ID do produto sugerido
@@ -265,7 +296,12 @@ export function ProductOfferForm({ products, productsLoadFailed }: ProductOfferF
           </p>
         </div>
         {hasProducts ? (
-          <ProductSelect label="Escolher produto principal" onSelect={selectTriggerProduct} products={products} />
+          <ProductSelect
+            label="Escolher produto principal"
+            onSelect={selectTriggerProduct}
+            products={products}
+            value={triggerProductId}
+          />
         ) : null}
         <label className="grid gap-2 text-sm font-medium text-zinc-800">
           ID do produto principal
@@ -306,7 +342,11 @@ export function ProductOfferForm({ products, productsLoadFailed }: ProductOfferF
           Status
           <select
             name="isActive"
-            defaultValue="true"
+            onChange={(event) => {
+              setMessage(null);
+              setIsActive(event.target.value !== "false");
+            }}
+            value={isActive ? "true" : "false"}
             className="h-10 rounded-md border border-zinc-300 px-3 text-sm outline-none focus:border-zinc-900"
           >
             <option value="true">Ativa</option>
@@ -327,7 +367,7 @@ export function ProductOfferForm({ products, productsLoadFailed }: ProductOfferF
           type="submit"
           className="inline-flex h-10 items-center justify-center rounded-md bg-zinc-950 px-4 text-sm font-medium text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-zinc-400"
         >
-          {isSubmitting ? "Salvando..." : "Salvar oferta"}
+          {isSubmitting ? submittingLabel : submitLabel}
         </button>
       </div>
     </form>
