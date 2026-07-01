@@ -1,39 +1,46 @@
 # NubeSDK Compre Junto
 
-Esta é a implementação paralela do widget Compre Junto para storefront via NubeSDK.
+Esta e a implementacao paralela do widget Compre Junto para storefront via NubeSDK.
 O widget legado em `/widget/compre-junto.js` continua existindo apenas como fallback/demo.
 
-## Modo RESET diagnóstico v6
+## Modo diagnostico atual
 
-O bundle atual está temporariamente em modo RESET diagnóstico v6.
+O bundle publico esta temporariamente em modo diagnostico perf-safe para validar entrega, cache e montagem no PDP.
 
-Objetivo: provar se o Partner Portal está entregando a nova versão ativa do script `#7880 Compre Junto NubeSDK`.
-
-Nesta versão, o entrypoint NubeSDK:
-
-- não lê state;
-- não chama fetch;
-- não depende de `productId`;
-- não depende de `storeId`;
-- não depende de oferta cadastrada;
-- não usa `window`, `document`, DOM direto, `querySelector`, `innerHTML` ou jQuery.
-
-Texto renderizado:
+Texto renderizado no bloco diagnostico:
 
 ```text
-Compre Junto NubeSDK RESET v6
-Teste limpo sem legado
+Compre Junto NubeSDK onload #841a480 ativado
+Render diagnostico com fallback direto no PDP
 ```
 
-Logs seguros esperados:
+Caracteristicas do bundle atual:
 
-- `Compre Junto NubeSDK RESET v6 bootstrap`;
-- `Compre Junto NubeSDK RESET v6 render enviado`.
+- nao chama fetch/API;
+- nao depende de `productId`, `storeId` ou oferta cadastrada;
+- tenta primeiro o slot NubeSDK `after_product_detail_add_to_cart`;
+- usa `requestIdleCallback` quando disponivel;
+- usa fallback real com `setTimeout(..., 1200)`;
+- usa fallback DOM direto no PDP quando o slot nao materializa o bloco;
+- evita duplicidade pelo id `compre-junto-nubesdk-onload-test`;
+- nao usa logs repetitivos, polling agressivo ou `MutationObserver`.
 
-Se esse texto aparecer na loja com somente o `#7880` ativo, o Partner Portal está entregando a nova versão do bundle.
+## Verificacao Railway
 
-Se esse texto não aparecer, o problema está fora da lógica dinâmica do app: versão ativa do Partner Portal, cache,
-evento configurado, URL do bundle, instalação do script ou entrega do NubeSDK no storefront.
+Em 2026-07-01, a URL publica do Railway respondeu HTTP 200 e serviu o bundle com o texto:
+
+```text
+Compre Junto NubeSDK onload #841a480 ativado
+```
+
+URL verificada:
+
+```text
+https://compre-junto-nuvemshop-production.up.railway.app/nube/compre-junto.js
+```
+
+Conclusao: o Railway esta servindo a versao correta do arquivo estatico em `/nube/compre-junto.js`.
+Se o storefront da loja continuar exibindo uma versao antiga ou nao montar o bloco, o cache restante esta no lado da Nuvemshop/CDN/storefront ou no momento de disparo configurado do app script.
 
 ## Build
 
@@ -47,13 +54,11 @@ O build usa `tsup` e gera:
 public/nube/compre-junto.js
 ```
 
-Em produção, o bundle fica disponível em:
+O comando principal tambem regenera o bundle NubeSDK:
 
-```text
-https://compre-junto-nuvemshop-production.up.railway.app/nube/compre-junto.js
+```bash
+npm run build
 ```
-
-O comando principal `npm run build` também executa `npm run build:nube` antes do `next build`.
 
 ## Entry Point
 
@@ -63,43 +68,17 @@ O entrypoint exporta:
 export function App(nube: NubeSDK)
 ```
 
-Esse formato segue o template oficial usado para gerar bundle NubeSDK com `tsup` em ESM.
+Esse formato segue o template usado para gerar bundle NubeSDK com `tsup` em ESM.
 
-## Slots usados no RESET
+## Como testar no storefront
 
-O bundle renderiza temporariamente em três slots para maximizar a chance de visualização:
-
-- `after_product_detail_add_to_cart`;
-- `after_product_detail_price`;
-- `before_product_detail_add_to_cart`.
-
-## Como testar no Partner Portal
-
-1. Confirme que somente o `#7880 Compre Junto NubeSDK` está ativo.
-2. No `#7880`, use a URL de produção do bundle:
+1. Confirme que o app script ativo aponta para o bundle NubeSDK publico.
+2. Acesse uma pagina de produto, por exemplo `/produtos/.../`.
+3. Se o app script estiver configurado como `onfirstinteraction`, interaja com a pagina para disparar o script.
+4. Procure pelo texto:
 
 ```text
-https://compre-junto-nuvemshop-production.up.railway.app/nube/compre-junto.js
+Compre Junto NubeSDK onload #841a480 ativado
 ```
 
-3. Publique/instale a nova versão do script no Partner Portal.
-4. Confirme que a nova versão ficou ativa.
-5. Acesse uma página de produto e force recarregamento completo.
-6. Interaja com a página se o evento ativo continuar como `onfirstinteraction`.
-7. Procure pelo texto:
-
-```text
-Compre Junto NubeSDK RESET v6
-```
-
-## Próximo passo depois do RESET
-
-Depois que o RESET v6 aparecer na loja, reativar a versão dinâmica em etapas:
-
-1. ler o state do NubeSDK;
-2. confirmar página de produto;
-3. detectar `productId`;
-4. detectar `storeId`;
-5. chamar `/api/public/offers`;
-6. renderizar a oferta real;
-7. navegar para `suggestedProduct.path`.
+5. Se o texto existir no bundle do Railway mas nao aparecer na loja, investigar cache/entrega da Nuvemshop/CDN/storefront e a montagem do NubeSDK no tema.
