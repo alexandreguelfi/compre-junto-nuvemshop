@@ -320,3 +320,30 @@ Compre junto
 6. Clique em `Adicionar conjunto ao carrinho` e confirme que o carrinho recebe as duas variacoes com quantidade 1.
 7. Se o evento de carrinho falhar, confirme que o link `Ver produto recomendado` continua visivel.
 8. Se precisar diagnosticar sem oferta ativa, use uma URL com `?cj_debug=1` e procure pelo bloco `Compre Junto NubeSDK em modo diagnostico`.
+
+## Checkpoint - Carrinho conjunto validado no PDP
+
+Data: 01/07/2026
+
+PDP testado:
+https://lojadedemonstracaodeaplic2.lojavirtualnuvem.com.br/produtos/produto-a-1dgkr/
+
+Resultado validado:
+- O widget dinâmico "Compre junto" renderizou no PDP.
+- Produto principal: Produto A - R,00.
+- Produto recomendado: Produto B - R,00.
+- Preço combinado exibido: R,00.
+- O botão de carrinho conjunto executou via NubeSDK cart:add.
+- Após o clique, o widget exibiu "Conjunto adicionado".
+- A mensagem "Conjunto adicionado ao carrinho." apareceu.
+- O carrinho foi conferido e continha Produto A + Produto B adicionados corretamente.
+- O link "Ver produto recomendado" permaneceu disponível como fallback.
+
+Conclusão:
+A primeira versão segura do carrinho conjunto via NubeSDK funcionou no PDP e no carrinho da loja demo.
+
+Pendências futuras:
+- Configurar/desenhar regra de desconto real.
+- Adicionar imagem no Produto B para melhorar a apresentação visual.
+- Revisar otimização de performance do bundle, pois a Nuvemshop aprovou o script, mas informou que o impacto ficou no limite.
+- Avaliar melhoria visual/UX do widget antes da homologação final.
