@@ -10,6 +10,7 @@ export default defineConfig({
     options.alias = {
       "@tiendanube/nube-sdk-jsx/dist/jsx-runtime": "@tiendanube/nube-sdk-jsx/jsx-runtime",
     };
+    options.charset = "utf8";
   },
   format: ["esm"],
   minify: true,
