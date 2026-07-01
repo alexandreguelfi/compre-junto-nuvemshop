@@ -93,7 +93,7 @@ function createOnloadDiagnosticBlock(): NubeComponent {
           fontWeight: 700,
           margin: 0,
         },
-        children: "Compre Junto NubeSDK onload otimizado ativo",
+        children: "Compre Junto NubeSDK onload #841a480 ativado",
       },
       {
         type: "txt",
@@ -124,7 +124,7 @@ function createDomDiagnosticBlock(documentRef: Document) {
   ].join(";");
 
   const title = documentRef.createElement("div");
-  title.textContent = "Compre Junto NubeSDK onload otimizado ativo";
+  title.textContent = "Compre Junto NubeSDK onload #841a480 ativado";
   title.style.cssText = "font-size:16px;font-weight:700;line-height:1.3;margin:0 0 6px;";
 
   const subtitle = documentRef.createElement("div");
