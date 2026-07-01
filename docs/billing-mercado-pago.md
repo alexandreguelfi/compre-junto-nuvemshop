@@ -8,9 +8,9 @@ O deploy inicial deve manter `BILLING_ENFORCEMENT_ENABLED=false` para validar ch
 
 ## Variaveis de ambiente
 
-- `MERCADO_PAGO_ACCESS_TOKEN`: access token da nossa aplicacao Mercado Pago.
+- `MERCADO_PAGO_ACCESS_TOKEN`: access token da nossa aplicacao Mercado Pago, usado para consultas/sincronizacao de eventos reais.
 - `MERCADOPAGO_WEBHOOK_SECRET`: secret do webhook Mercado Pago. Em producao, webhook sem secret configurado e rejeitado.
-- `COMPRE_JUNTO_MP_PLAN_ID`: plano Mercado Pago existente. Obrigatorio para criar checkout nesta primeira versao segura.
+- `COMPRE_JUNTO_MP_PLAN_ID`: plano Mercado Pago existente. Obrigatorio para montar o checkout hospedado nesta primeira versao segura.
 - `COMPRE_JUNTO_PRICE`: preco mensal. Padrao: `49`.
 - `COMPRE_JUNTO_TRIAL_DAYS`: dias de trial. Padrao: `7`.
 - `BILLING_ENFORCEMENT_ENABLED`: feature flag de bloqueio comercial. Padrao seguro: `false`.
@@ -44,9 +44,11 @@ Status internos:
 1. O admin acessa `/admin/billing`.
 2. A tela mostra o plano Compre Junto Pro, preco, status atual e modo da feature flag.
 3. O botao "Assinar agora" chama `POST /api/billing/checkout`.
-4. A rota identifica a loja conectada, exige e-mail do pagador e cria a assinatura no Mercado Pago com `POST https://api.mercadopago.com/preapproval` usando `COMPRE_JUNTO_MP_PLAN_ID`.
-5. A resposta salva `providerSubscriptionId` e `initPoint`.
-6. O navegador redireciona o lojista para o checkout do Mercado Pago.
+4. A rota identifica a loja conectada e retorna o checkout hospedado do Mercado Pago:
+   `https://www.mercadopago.com.br/subscriptions/checkout?preapproval_plan_id=<COMPRE_JUNTO_MP_PLAN_ID>`.
+5. O navegador redireciona o lojista para o checkout hospedado do plano.
+
+Nesta versao MVP, o e-mail do pagador no formulario e opcional e nao e enviado por query string para o Mercado Pago. A criacao direta de assinatura via `POST https://api.mercadopago.com/preapproval` exige `card_token_id`; por isso, CardForm/CardToken fica como evolucao futura.
 
 ## Webhook
 

@@ -6,7 +6,6 @@ import {
   mapMercadoPagoStatusToInternalStatus,
   type BillingStatus,
 } from "@/src/lib/billing/commercial-status";
-import { getEnv } from "@/src/lib/env";
 import { prisma } from "@/src/lib/prisma";
 
 const MERCADO_PAGO_API_BASE_URL = "https://api.mercadopago.com";
@@ -28,7 +27,7 @@ type MercadoPagoSubscriptionPayload = {
 export type BillingCheckout = {
   checkoutUrl: string;
   initPoint: string;
-  providerSubscriptionId: string;
+  providerSubscriptionId: string | null;
   status: BillingStatus;
 };
 
@@ -90,6 +89,13 @@ function cleanEmail(value: unknown): string | null {
   return email.toLowerCase();
 }
 
+function buildHostedPlanCheckoutUrl(preapprovalPlanId: string) {
+  const url = new URL("https://www.mercadopago.com.br/subscriptions/checkout");
+  url.searchParams.set("preapproval_plan_id", preapprovalPlanId);
+
+  return url.toString();
+}
+
 function getAccessToken(): string {
   const accessToken = process.env.MERCADO_PAGO_ACCESS_TOKEN?.trim();
 
@@ -112,14 +118,6 @@ function parseDate(value: unknown): Date | null {
   const date = new Date(raw);
 
   return Number.isNaN(date.getTime()) ? null : date;
-}
-
-function addDays(date: Date, days: number) {
-  return new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
-}
-
-function buildExternalReference(store: { id: string; nuvemshopStoreId: string }) {
-  return `store:${store.nuvemshopStoreId}:${store.id}`;
 }
 
 function readStoreIdFromExternalReference(value: unknown): string | null {
@@ -189,18 +187,6 @@ function readSubscriptionId(payload: MercadoPagoSubscriptionPayload) {
   return subscriptionId;
 }
 
-function readCheckoutUrl(payload: MercadoPagoSubscriptionPayload) {
-  const initPoint = cleanString(payload.init_point);
-
-  if (!initPoint) {
-    throw new MercadoPagoBillingError("Mercado Pago response missing checkout URL.", {
-      reason: "missing_init_point",
-    }, 502);
-  }
-
-  return initPoint;
-}
-
 function getCurrentPeriodEnd(payload: MercadoPagoSubscriptionPayload) {
   return (
     parseDate(payload.next_payment_date) ??
@@ -221,7 +207,6 @@ export async function createCheckoutForStore(
     select: {
       email: true,
       id: true,
-      nuvemshopStoreId: true,
     },
   });
 
@@ -231,72 +216,32 @@ export async function createCheckoutForStore(
     }, 404);
   }
 
-  const payerEmail = cleanEmail(payerEmailInput) ?? cleanEmail(store.email);
-
-  if (!payerEmail) {
-    throw new MercadoPagoBillingError("Payer email is required for Mercado Pago checkout.", {
-      reason: "payer_email_required",
-    }, 400);
-  }
-
   if (!config.mercadoPagoPlanId) {
     throw new MercadoPagoBillingError("Mercado Pago plan id is not configured.", {
       reason: "missing_plan_id",
     }, 503);
   }
 
-  const appUrl = getEnv().NUVEMSHOP_APP_URL;
-  const body: Record<string, unknown> = {
-    back_url: `${appUrl}/admin/billing?checkout=return`,
-    external_reference: buildExternalReference(store),
-    payer_email: payerEmail,
-    preapproval_plan_id: config.mercadoPagoPlanId,
-    reason: config.name,
-    status: "pending",
-  };
+  const payerEmail = cleanEmail(payerEmailInput);
 
-  const payload = normalizeSubscriptionPayload(
-    await mercadoPagoRequest("/preapproval", {
-      body: JSON.stringify(body),
-      method: "POST",
-    }),
-  );
-  const providerSubscriptionId = readSubscriptionId(payload);
-  const checkoutUrl = readCheckoutUrl(payload);
-  const externalStatus = cleanString(payload.status) ?? "pending";
-  const status = mapMercadoPagoStatusToInternalStatus(externalStatus);
-  const trialEndsAt = status === "PENDING" || status === "TRIAL" ? addDays(new Date(), config.trialDays) : null;
-
-  await prisma.$transaction([
-    prisma.store.update({
+  if (payerEmail && !store.email) {
+    await prisma.store.update({
       where: {
         id: store.id,
       },
       data: {
-        email: store.email ?? payerEmail,
+        email: payerEmail,
       },
-    }),
-    prisma.billingSubscription.create({
-      data: {
-        checkoutUrl,
-        currentPeriodEnd: getCurrentPeriodEnd(payload),
-        externalStatus,
-        initPoint: checkoutUrl,
-        provider: BILLING_PROVIDER,
-        providerPlanId: cleanString(payload.preapproval_plan_id) ?? config.mercadoPagoPlanId,
-        providerSubscriptionId,
-        status,
-        storeId: store.id,
-        trialEndsAt,
-      },
-    }),
-  ]);
+    });
+  }
+
+  const checkoutUrl = buildHostedPlanCheckoutUrl(config.mercadoPagoPlanId);
 
   return {
     checkoutUrl,
     initPoint: checkoutUrl,
-    providerSubscriptionId,
-    status,
+    providerSubscriptionId: null,
+    status: "PENDING",
   };
 }
 

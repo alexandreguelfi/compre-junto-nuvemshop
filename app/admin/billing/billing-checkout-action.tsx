@@ -26,7 +26,7 @@ export function BillingCheckoutAction({ defaultEmail, disabledReason }: BillingC
     }
 
     setIsSubmitting(true);
-    setMessage("Criando checkout seguro no Mercado Pago...");
+    setMessage("Preparando checkout hospedado no Mercado Pago...");
 
     try {
       const response = await fetch("/api/billing/checkout", {
@@ -57,7 +57,7 @@ export function BillingCheckoutAction({ defaultEmail, disabledReason }: BillingC
   return (
     <form onSubmit={handleSubmit} className="grid gap-4 rounded-md border border-zinc-200 bg-white p-5">
       <label className="grid gap-2 text-sm font-medium text-zinc-800">
-        E-mail do pagador
+        E-mail do pagador (opcional)
         <input
           autoComplete="email"
           disabled={isSubmitting || Boolean(disabledReason)}
@@ -65,7 +65,6 @@ export function BillingCheckoutAction({ defaultEmail, disabledReason }: BillingC
             setEmail(event.target.value);
             setMessage(disabledReason);
           }}
-          required
           type="email"
           value={email}
           className="h-10 rounded-md border border-zinc-300 px-3 text-sm outline-none focus:border-zinc-900 disabled:bg-zinc-100 disabled:text-zinc-500"
@@ -88,7 +87,7 @@ export function BillingCheckoutAction({ defaultEmail, disabledReason }: BillingC
         type="submit"
         className="inline-flex h-10 items-center justify-center rounded-md bg-zinc-950 px-4 text-sm font-medium text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-zinc-400"
       >
-        {isSubmitting ? "Criando checkout..." : "Assinar agora"}
+        {isSubmitting ? "Preparando checkout..." : "Assinar agora"}
       </button>
     </form>
   );

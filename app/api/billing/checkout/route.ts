@@ -65,7 +65,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     const safeError = getSafeBillingError(error);
 
-    console.warn("Mercado Pago checkout creation failed.", safeError.safeDetails);
+    console.warn("Mercado Pago hosted checkout preparation failed.", safeError.safeDetails);
 
     return jsonResponse({ error: safeError.message }, safeError.status);
   }

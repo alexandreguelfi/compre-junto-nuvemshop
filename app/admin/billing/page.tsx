@@ -27,10 +27,8 @@ export default async function BillingPage({ searchParams }: BillingPageProps) {
   const access = store ? await getCommercialStatus(store.id) : null;
   const plan = getBillingPlanConfig();
   const showCheckoutReturn = getCheckoutFeedback(params.checkout);
-  const disabledReason = !plan.hasMercadoPagoAccessToken
-    ? "Configure MERCADO_PAGO_ACCESS_TOKEN para habilitar checkout."
-    : !plan.mercadoPagoPlanId
-      ? "Configure COMPRE_JUNTO_MP_PLAN_ID para habilitar checkout."
+  const disabledReason = !plan.mercadoPagoPlanId
+    ? "Configure COMPRE_JUNTO_MP_PLAN_ID para habilitar checkout."
     : null;
 
   return (
