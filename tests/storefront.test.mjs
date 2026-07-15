@@ -133,16 +133,37 @@ test("render leases remain store/product scoped across A to B to A navigation", 
   assert.notEqual(keyA, keyB);
 });
 
-test("legacy script detects explicit storeId and productId and calls the app API origin", async () => {
+test("legacy script uses the official app origin when Nuvemshop serves it from apps-scripts", async () => {
   const urls = [];
+  const beacons = [];
   const script = {
-    dataset: { productId: "321", storeId: "654" },
+    dataset: { productId: "352812666", storeId: "7895581" },
     getAttribute(name) {
-      return name === "data-product-id" ? "321" : name === "data-store-id" ? "654" : "";
+      return name === "data-product-id" ? "352812666" : name === "data-store-id" ? "7895581" : "";
     },
-    src: "https://app.example/widget/compre-junto.js?store=654",
+    src: "https://apps-scripts.tiendanube.com/store/7895581/script/8403.js",
   };
   const storage = new Map();
+  const makeElement = () => {
+    const attributes = new Map();
+    const element = {
+      appendChild(child) {
+        this.children.push(child);
+        child.parentNode = this;
+        return child;
+      },
+      children: [],
+      getAttribute(name) { return attributes.get(name) ?? null; },
+      remove() {},
+      setAttribute(name, value) { attributes.set(name, String(value)); },
+      style: {},
+    };
+    Object.defineProperty(element, "innerHTML", {
+      set() { element.children = []; },
+    });
+    return element;
+  };
+  const container = makeElement();
   const window = {
     addEventListener() {},
     location: { href: "https://loja.example/produtos/x/", origin: "https://loja.example", search: "" },
@@ -155,9 +176,10 @@ test("legacy script detects explicit storeId and productId and calls the app API
     currentScript: script,
     documentElement: null,
     addEventListener() {},
-    getElementById() { return null; },
+    createElement: makeElement,
+    getElementById(id) { return container.children.find((element) => element.id === id) ?? null; },
     getElementsByTagName() { return [script]; },
-    querySelector() { return null; },
+    querySelector(selector) { return selector === "[data-compre-junto-widget]" ? container : null; },
   };
   const context = {
     Blob,
@@ -167,10 +189,19 @@ test("legacy script detects explicit storeId and productId and calls the app API
     document,
     fetch: async (url) => {
       urls.push(String(url));
-      return { json: async () => ({ offer: null }) };
+      return {
+        json: async () => ({
+          offer: {
+            principalProduct: { id: "352812666", name: "Principal", price: "10.00" },
+            suggestedProduct: { id: "352812667", name: "Sugerido", path: "/produtos/sugerido/", price: "20.00" },
+          },
+        }),
+      };
     },
     Intl,
-    navigator: {},
+    navigator: { sendBeacon: (url) => void beacons.push(String(url)) },
+    clearInterval() {},
+    setInterval: () => 1,
     setTimeout: (callback) => (callback(), 1),
     window,
   };
@@ -178,10 +209,12 @@ test("legacy script detects explicit storeId and productId and calls the app API
   vm.runInNewContext(widgetScript, context);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(urls.length, 1);
-  assert.match(urls[0], /^https:\/\/app\.example\/api\/public\/offers\?/);
-  assert.match(urls[0], /productId=321/);
-  assert.match(urls[0], /storeId=654/);
+  assert.match(urls[0], /^https:\/\/compre-junto-nuvemshop-production\.up\.railway\.app\/api\/public\/offers\?/);
+  assert.match(urls[0], /productId=352812666/);
+  assert.match(urls[0], /storeId=7895581/);
   assert.match(urls[0], /technology=legacy/);
+  assert.deepEqual(beacons, ["https://compre-junto-nuvemshop-production.up.railway.app/api/public/storefront-events"]);
+  assert.equal([...urls, ...beacons].some((url) => url.includes("apps-scripts.tiendanube.com/api/public/")), false);
 });
 
 test("storefront scripts include safe error, timeout, cart and SPA handling", async () => {
@@ -195,5 +228,7 @@ test("storefront scripts include safe error, timeout, cart and SPA handling", as
   assert.doesNotMatch(widgetScript, /Tiendanube\.addToCart/);
   assert.match(widgetScript, /Ver produto recomendado/);
   assert.match(widgetScript, /recordRendered\(context\)/);
+  assert.match(widgetScript, /https:\/\/compre-junto-nuvemshop-production\.up\.railway\.app/);
+  assert.doesNotMatch(widgetScript, /getDataValue\(script, "apiOrigin"\) \|\| script\.src/);
   assert.doesNotMatch(widgetScript, /accessToken|client_secret|Authorization/);
 });

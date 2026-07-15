@@ -4,6 +4,7 @@ export const widgetScript = String.raw`
 
   var ROOT_ID = "compre-junto-widget-root";
   var LOCK_PREFIX = "compre-junto:render-lock:";
+  var APP_ORIGIN = "https://compre-junto-nuvemshop-production.up.railway.app";
   var LEASE_MAX_AGE_MS = 5000;
   var LEASE_HEARTBEAT_MS = 1500;
   var technology = "legacy";
@@ -110,12 +111,19 @@ export const widgetScript = String.raw`
     return { key: storeId + ":" + productId, productId: productId, storeId: storeId };
   }
 
-  function buildOfferUrl(script, context) {
-    var origin = window.location.origin;
+  function getApiOrigin(script) {
+    var override = getDataValue(script, "apiOrigin");
+    if (!override) return APP_ORIGIN;
     try {
-      origin = new URL(getDataValue(script, "apiOrigin") || script.src, window.location.href).origin;
-    } catch (error) {}
-    var url = new URL("/api/public/offers", origin);
+      var url = new URL(override);
+      return url.protocol === "https:" ? url.origin : APP_ORIGIN;
+    } catch (error) {
+      return APP_ORIGIN;
+    }
+  }
+
+  function buildOfferUrl(script, context) {
+    var url = new URL("/api/public/offers", getApiOrigin(script));
     if (context.productId) url.searchParams.set("productId", context.productId);
     if (context.storeId) url.searchParams.set("storeId", context.storeId);
     url.searchParams.set("technology", technology);
@@ -124,11 +132,7 @@ export const widgetScript = String.raw`
   }
 
   function eventUrl(script) {
-    try {
-      return new URL("/api/public/storefront-events", new URL(getDataValue(script, "apiOrigin") || script.src).origin).toString();
-    } catch (error) {
-      return "";
-    }
+    return new URL("/api/public/storefront-events", getApiOrigin(script)).toString();
   }
 
   function report(script, context, code) {
