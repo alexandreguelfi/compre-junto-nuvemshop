@@ -1,19 +1,27 @@
+import { cookies } from "next/headers";
+
 import { prisma } from "@/src/lib/prisma";
+import { ADMIN_STORE_COOKIE, readAdminStoreSession } from "@/src/lib/stores/admin-session";
 
 const connectedStoreWhere = {
-  AND: [
-    {
-      accessTokenCiphertext: {
-        not: null,
-      },
-    },
-    {
-      accessTokenCiphertext: {
-        not: "",
-      },
-    },
-  ],
+  accessTokenCiphertext: {
+    not: null,
+  },
+  status: "CONNECTED" as const,
 };
+
+const connectedStoreSelect = {
+  commercialStatus: true,
+  createdAt: true,
+  email: true,
+  id: true,
+  installedAt: true,
+  nuvemshopStoreId: true,
+  scopes: true,
+  trialEndsAt: true,
+  trialStartedAt: true,
+  updatedAt: true,
+} as const;
 
 function getSafeStoreLookupError(error: unknown) {
   if (typeof error !== "object" || error === null) {
@@ -28,83 +36,41 @@ function getSafeStoreLookupError(error: unknown) {
   };
 }
 
-function getLookupReason(
-  connectedStore: { id: string } | null,
-  latestStore: { accessTokenCiphertext: string | null } | null,
-) {
-  if (connectedStore) {
-    return "connected_store_found";
+export async function getConnectedStoreByProviderId(providerStoreId: string) {
+  if (!/^\d+$/.test(providerStoreId)) {
+    return null;
   }
 
-  if (!latestStore) {
-    return "no_stores_found";
-  }
-
-  if (latestStore.accessTokenCiphertext === null) {
-    return "latest_store_token_null";
-  }
-
-  if (latestStore.accessTokenCiphertext === "") {
-    return "latest_store_token_empty";
-  }
-
-  return "no_matching_connected_store";
+  return prisma.store.findUnique({
+    where: {
+      nuvemshopStoreId: providerStoreId,
+      ...connectedStoreWhere,
+    },
+    select: connectedStoreSelect,
+  });
 }
 
 export async function getConnectedStore() {
   try {
-    const [storesFound, storesWithFilledToken, connectedStore, latestStore] = await prisma.$transaction([
-      prisma.store.count(),
-      prisma.store.count({
-        where: connectedStoreWhere,
-      }),
-      prisma.store.findFirst({
-        where: connectedStoreWhere,
-        orderBy: {
-          updatedAt: "desc",
-        },
-        select: {
-          commercialStatus: true,
-          email: true,
-          id: true,
-          installedAt: true,
-          createdAt: true,
-          nuvemshopStoreId: true,
-          trialEndsAt: true,
-          trialStartedAt: true,
-          updatedAt: true,
-        },
-      }),
-      prisma.store.findFirst({
-        orderBy: {
-          updatedAt: "desc",
-        },
-        select: {
-          id: true,
-          accessTokenCiphertext: true,
-          nuvemshopStoreId: true,
-          updatedAt: true,
-        },
-      }),
-    ]);
+    const cookieStore = await cookies();
+    const providerStoreId = readAdminStoreSession(cookieStore.get(ADMIN_STORE_COOKIE)?.value);
+
+    if (!providerStoreId) {
+      console.info("Connected store lookup diagnostic.", { reason: "admin_store_session_unavailable" });
+      return null;
+    }
+
+    const store = await getConnectedStoreByProviderId(providerStoreId);
 
     console.info("Connected store lookup diagnostic.", {
-      storesFound,
-      storesWithFilledToken,
-      hasFilledToken: storesWithFilledToken > 0,
-      selectedStoreId: connectedStore?.id ?? null,
-      selectedProviderStoreId: connectedStore?.nuvemshopStoreId ?? null,
-      selectedUpdatedAt: connectedStore?.updatedAt.toISOString() ?? null,
-      latestStoreId: latestStore?.id ?? null,
-      latestProviderStoreId: latestStore?.nuvemshopStoreId ?? null,
-      latestUpdatedAt: latestStore?.updatedAt.toISOString() ?? null,
-      reason: getLookupReason(connectedStore, latestStore),
+      providerStoreId,
+      reason: store ? "connected_store_found" : "session_store_not_connected",
+      storeId: store?.id ?? null,
     });
 
-    return connectedStore;
+    return store;
   } catch (error) {
     console.warn("Connected store lookup failed.", getSafeStoreLookupError(error));
-
     return null;
   }
 }

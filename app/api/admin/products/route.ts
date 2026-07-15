@@ -4,6 +4,7 @@ import { type NextRequest, NextResponse } from "next/server";
 
 import { getEnv } from "@/src/lib/env";
 import { listConnectedStoreProducts, NuvemshopProductsError } from "@/src/lib/nuvemshop/products";
+import { getConnectedStore, getConnectedStoreByProviderId } from "@/src/lib/stores/current-store";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -61,9 +62,18 @@ export async function GET(request: NextRequest) {
   }
 
   const query = request.nextUrl.searchParams.get("q")?.trim() || null;
+  const requestedStoreId = request.nextUrl.searchParams.get("storeId")?.trim() || null;
 
   try {
-    const products = await listConnectedStoreProducts({ query });
+    const store = requestedStoreId
+      ? await getConnectedStoreByProviderId(requestedStoreId)
+      : await getConnectedStore();
+
+    if (!store) {
+      return jsonResponse({ error: "A unique connected store is required." }, 400);
+    }
+
+    const products = await listConnectedStoreProducts({ query, storeId: store.id });
 
     return jsonResponse({
       limit: 50,

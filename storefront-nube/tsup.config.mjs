@@ -4,7 +4,7 @@ export default defineConfig({
   bundle: true,
   clean: true,
   entry: {
-    "compre-junto": "storefront-nube/src/main.tsx",
+    "compre-junto": "storefront-nube/src/main.ts",
   },
   esbuildOptions(options) {
     options.alias = {

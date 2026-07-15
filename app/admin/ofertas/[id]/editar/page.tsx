@@ -67,7 +67,7 @@ export default async function EditOfferPage({ params }: EditOfferPageProps) {
   }
 
   const productsResult = store && canEditOffer
-    ? await listConnectedStoreProducts().then(
+    ? await listConnectedStoreProducts({ storeId: store.id }).then(
         (products) => ({
           products,
           productsLoadFailed: false,

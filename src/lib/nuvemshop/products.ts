@@ -6,21 +6,6 @@ const NUVEMSHOP_API_BASE_URL = `https://api.tiendanube.com/${NUVEMSHOP_API_VERSI
 const USER_AGENT = "CompreJuntoNuvemshop atendimento@casasmartnest.com.br";
 const DEFAULT_PRODUCT_LIMIT = 50;
 
-const connectedStoreWhere = {
-  AND: [
-    {
-      accessTokenCiphertext: {
-        not: null,
-      },
-    },
-    {
-      accessTokenCiphertext: {
-        not: "",
-      },
-    },
-  ],
-};
-
 export type NuvemshopAdminProduct = {
   handle: string | null;
   id: string;
@@ -168,11 +153,14 @@ function productMatchesQuery(product: NuvemshopAdminProduct, query: string | nul
     .some((item) => item.toLowerCase().includes(normalizedQuery));
 }
 
-async function readConnectedStoreCredentials(): Promise<ConnectedStoreCredentials | null> {
-  const store = await prisma.store.findFirst({
-    where: connectedStoreWhere,
-    orderBy: {
-      updatedAt: "desc",
+async function readConnectedStoreCredentials(storeId: string): Promise<ConnectedStoreCredentials | null> {
+  const store = await prisma.store.findUnique({
+    where: {
+      id: storeId,
+      accessTokenCiphertext: {
+        not: null,
+      },
+      status: "CONNECTED",
     },
     select: {
       accessTokenCiphertext: true,
@@ -200,14 +188,49 @@ async function readJsonArray(response: Response): Promise<unknown[]> {
   }
 }
 
+async function fetchConnectedStoreProduct(credentials: ConnectedStoreCredentials, productId: string) {
+  if (!/^\d{1,30}$/.test(productId)) return null;
+  const productUrl = `${NUVEMSHOP_API_BASE_URL}/${encodeURIComponent(credentials.providerStoreId)}/products/${encodeURIComponent(productId)}`;
+  const response = await fetch(productUrl, {
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${credentials.accessToken}`,
+      "User-Agent": USER_AGENT,
+    },
+    cache: "no-store",
+  });
+
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    throw new NuvemshopProductsError("Nuvemshop product validation failed", {
+      httpStatus: response.status,
+      providerStoreId: credentials.providerStoreId,
+    });
+  }
+
+  const product = normalizeProduct(await response.json().catch(() => null));
+  return product?.id === productId ? product : null;
+}
+
+export async function getConnectedStoreProductsByIds(storeId: string, productIds: string[]) {
+  const credentials = await readConnectedStoreCredentials(storeId);
+  if (!credentials) return [];
+
+  return (await Promise.all(productIds.map((productId) => fetchConnectedStoreProduct(credentials, productId)))).filter(
+    (product): product is NuvemshopAdminProduct => Boolean(product),
+  );
+}
+
 export async function listConnectedStoreProducts({
+  storeId,
   limit = DEFAULT_PRODUCT_LIMIT,
   query = null,
 }: {
+  storeId: string;
   limit?: number;
   query?: string | null;
-} = {}): Promise<NuvemshopAdminProduct[]> {
-  const credentials = await readConnectedStoreCredentials();
+}): Promise<NuvemshopAdminProduct[]> {
+  const credentials = await readConnectedStoreCredentials(storeId);
 
   if (!credentials) {
     return [];

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getCommercialStatus } from "@/src/lib/billing/commercial-status";
+import { getConnectedStoreProductsByIds } from "@/src/lib/nuvemshop/products";
 import { prisma } from "@/src/lib/prisma";
 import { getConnectedStore } from "@/src/lib/stores/current-store";
 
@@ -34,6 +35,7 @@ const OFFER_FORM_MESSAGES = {
   notFound: "Oferta nao encontrada.",
   sameProduct: "Escolha produtos diferentes para criar uma oferta Compre Junto.",
   saveFailed: "Nao foi possivel atualizar a oferta agora.",
+  productsNotFound: "Os produtos selecionados nao pertencem ao catalogo desta instalacao.",
 };
 
 function readTextField(formData: FormData, fieldName: string): string {
@@ -172,6 +174,16 @@ export async function PATCH(request: Request, context: OfferRouteContext) {
       return jsonError(OFFER_FORM_MESSAGES.notFound, 404);
     }
 
+    let validatedNames: { suggested: string; trigger: string } | null = null;
+    if (updatesOfferFields) {
+      const products = await getConnectedStoreProductsByIds(store.id, [input.triggerProductId, input.suggestedProductId]);
+      const productById = new Map(products.map((product) => [product.id, product]));
+      const triggerProduct = productById.get(input.triggerProductId);
+      const suggestedProduct = productById.get(input.suggestedProductId);
+      if (!triggerProduct || !suggestedProduct) return jsonError(OFFER_FORM_MESSAGES.productsNotFound, 400);
+      validatedNames = { suggested: suggestedProduct.name, trigger: triggerProduct.name };
+    }
+
     const nextIsActive = input.isActive ?? currentOffer.isActive;
     const nextTriggerProductId = updatesOfferFields
       ? input.triggerProductId
@@ -205,16 +217,17 @@ export async function PATCH(request: Request, context: OfferRouteContext) {
       await prisma.crossSellOffer.update({
         where: {
           id: currentOffer.id,
+          storeId: store.id,
         },
         data: {
           isActive: nextIsActive,
           suggestedProductId: input.suggestedProductId,
-          suggestedProductName: input.suggestedProductName,
+          suggestedProductName: validatedNames?.suggested ?? input.suggestedProductName,
           triggers: {
             deleteMany: {},
             create: {
               triggerProductId: input.triggerProductId,
-              triggerProductName: input.triggerProductName,
+              triggerProductName: validatedNames?.trigger ?? input.triggerProductName,
             },
           },
         },
@@ -223,6 +236,7 @@ export async function PATCH(request: Request, context: OfferRouteContext) {
       await prisma.crossSellOffer.update({
         where: {
           id: currentOffer.id,
+          storeId: store.id,
         },
         data: {
           isActive: nextIsActive,

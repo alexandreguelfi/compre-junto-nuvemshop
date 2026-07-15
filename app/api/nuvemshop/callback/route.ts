@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { COMPRE_JUNTO_PLAN } from "@/src/lib/billing/commercial-status";
+import { repairTrialDates } from "@/src/lib/billing/commercial-policy";
+import { getBillingPlanConfig } from "@/src/lib/billing/commercial-status";
 import { getEnv } from "@/src/lib/env";
 import {
   encryptAccessTokenForStorage,
@@ -9,6 +10,11 @@ import {
   validateInstallState,
 } from "@/src/lib/nuvemshop/auth";
 import { prisma } from "@/src/lib/prisma";
+import {
+  ADMIN_STORE_COOKIE,
+  ADMIN_STORE_SESSION_MAX_AGE_SECONDS,
+  createAdminStoreSession,
+} from "@/src/lib/stores/admin-session";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -60,7 +66,7 @@ export async function GET(request: NextRequest) {
     return jsonError("Missing Nuvemshop authorization code.", 400);
   }
 
-  if (state && !validateInstallState(state)) {
+  if (!validateInstallState(state)) {
     logSafeCallbackFailure("invalid_state", {
       state: "present",
     });
@@ -99,7 +105,7 @@ export async function GET(request: NextRequest) {
 
   try {
     const trialStartedAt = new Date();
-    const trialEndsAt = addDays(trialStartedAt, COMPRE_JUNTO_PLAN.trialDays);
+    const trialEndsAt = addDays(trialStartedAt, getBillingPlanConfig().trialDays);
     const savedStore = await prisma.store.upsert({
       where: {
         nuvemshopStoreId: token.storeId,
@@ -110,6 +116,7 @@ export async function GET(request: NextRequest) {
         commercialStatus: "TRIALING",
         disconnectedAt: null,
         scopes: token.scopes,
+        status: "CONNECTED",
         trialEndsAt,
         trialStartedAt,
       },
@@ -117,26 +124,28 @@ export async function GET(request: NextRequest) {
         accessTokenCiphertext,
         disconnectedAt: null,
         scopes: token.scopes,
+        status: "CONNECTED",
       },
       select: {
         commercialStatus: true,
+        createdAt: true,
         id: true,
+        installedAt: true,
         nuvemshopStoreId: true,
         trialEndsAt: true,
         trialStartedAt: true,
         updatedAt: true,
       },
     });
-    const existingTrialStartedAt = savedStore.trialStartedAt ?? trialStartedAt;
-
     if (!savedStore.trialStartedAt || !savedStore.trialEndsAt) {
+      const repairedTrial = repairTrialDates(savedStore, getBillingPlanConfig().trialDays);
       await prisma.store.update({
         where: {
           id: savedStore.id,
         },
         data: {
-          trialEndsAt: savedStore.trialEndsAt ?? addDays(existingTrialStartedAt, COMPRE_JUNTO_PLAN.trialDays),
-          trialStartedAt: existingTrialStartedAt,
+          trialEndsAt: repairedTrial.trialEndsAt,
+          trialStartedAt: repairedTrial.trialStartedAt,
         },
       });
     }
@@ -161,7 +170,16 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    return NextResponse.redirect(new URL("/admin", getEnv().NUVEMSHOP_APP_URL));
+    const response = NextResponse.redirect(new URL("/admin", getEnv().NUVEMSHOP_APP_URL));
+    response.cookies.set(ADMIN_STORE_COOKIE, createAdminStoreSession(token.storeId), {
+      httpOnly: true,
+      maxAge: ADMIN_STORE_SESSION_MAX_AGE_SECONDS,
+      path: "/",
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+    });
+
+    return response;
   } catch {
     logSafeCallbackFailure("redirect", {
       storeId: token.storeId,

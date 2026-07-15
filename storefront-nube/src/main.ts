@@ -1,10 +1,15 @@
 import type { NubeComponent, NubeSDK, NubeSDKState, ProductDetails, ProductVariant } from "@tiendanube/nube-sdk-types";
 
-const BLOCK_ID = "compre-junto-nubesdk-onload-test";
+const BLOCK_ID = "compre-junto-widget-root";
+const DIAGNOSTIC_BLOCK_ID = "compre-junto-widget-diagnostic";
 const TARGET_SLOT = "after_product_detail_add_to_cart";
 const FALLBACK_DELAY_MS = 1200;
 const APP_ORIGIN = "https://compre-junto-nuvemshop-production.up.railway.app";
 const PUBLIC_OFFERS_URL = `${APP_ORIGIN}/api/public/offers`;
+const STOREFRONT_EVENTS_URL = `${APP_ORIGIN}/api/public/storefront-events`;
+const RENDER_LOCK_PREFIX = "compre-junto:render-lock:";
+const RENDER_LEASE_MAX_AGE_MS = 5000;
+const RENDER_LEASE_HEARTBEAT_MS = 1500;
 const CART_ADD_TIMEOUT_MS = 8000;
 
 const DEBUG_QUERY_KEYS = ["cj_debug", "compre_junto_debug", "nubesdk_debug"] as const;
@@ -45,10 +50,16 @@ type ProductContext = {
   currencySymbol: string;
   language: string;
   mainProduct: ProductCardData;
-  storeId: string | null;
+  storeId: string;
 };
 
 type PublicOfferResponse = {
+  diagnostic?: {
+    code?: string;
+    productDetected?: boolean;
+    scriptLoaded?: boolean;
+    storeDetected?: boolean;
+  };
   offer?: {
     principalProductId?: string;
     suggestedProduct?: {
@@ -80,14 +91,18 @@ type ActiveOffer = {
 
 type CartAddStatus = "idle" | "loading" | "success" | "error";
 
-let renderStarted = false;
 let warningLogged = false;
 let cartListenersRegistered = false;
+let variantListenerRegistered = false;
 let activeOffer: ActiveOffer | null = null;
 let cartAddStatus: CartAddStatus = "idle";
 let cartStatusMessage: string | null = null;
 let cartAddTimeout: ReturnType<typeof setTimeout> | undefined;
 let pendingCartItems: CartItemExpectation[] | null = null;
+let currentContextKey = "";
+let pendingContextKey = "";
+let requestVersion = 0;
+let renderLeaseTimer: ReturnType<typeof setInterval> | undefined;
 
 function getBrowserGlobals() {
   return globalThis as unknown as BrowserGlobals;
@@ -207,9 +222,7 @@ function getAvailableVariant(product: ProductDetails): ProductVariant | null {
       }
 
       return variant.stock === null || variant.stock > 0;
-    }) ??
-    variants[0] ??
-    null
+    }) ?? null
   );
 }
 
@@ -245,7 +258,7 @@ function parsePositiveInteger(value: string | null | undefined) {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
-function readProductContext(nube: NubeSDK): ProductContext | null {
+export function readProductContext(nube: NubeSDK): ProductContext | null {
   try {
     const state = nube.getState();
     const page = state.location.page;
@@ -264,6 +277,12 @@ function readProductContext(nube: NubeSDK): ProductContext | null {
       language,
     };
 
+    const storeId = state.store.id ? String(state.store.id) : "";
+
+    if (!storeId) {
+      return null;
+    }
+
     return {
       ...baseContext,
       mainProduct: {
@@ -275,22 +294,14 @@ function readProductContext(nube: NubeSDK): ProductContext | null {
         url: product.canonical_url || null,
         variantId: variant?.id ? String(variant.id) : null,
       },
-      storeId: state.store.id ? String(state.store.id) : null,
+      storeId,
     };
   } catch {
     return null;
   }
 }
 
-function isPathProductDetailPage() {
-  try {
-    return getBrowserGlobals().location?.pathname.includes("/produtos/") === true;
-  } catch {
-    return false;
-  }
-}
-
-function isSafeDiagnosticMode(nube?: NubeSDK) {
+function isDiagnosticModeRequested(nube?: NubeSDK) {
   try {
     const stateQueries = nube?.getState().location.queries ?? {};
 
@@ -310,9 +321,7 @@ function isSafeDiagnosticMode(nube?: NubeSDK) {
 
     const params = new URLSearchParams(location.search);
     const hasDebugParam = DEBUG_QUERY_KEYS.some((key) => params.get(key) === "1" || params.get(key) === "true");
-    const isLocal = location.hostname === "localhost" || location.hostname === "127.0.0.1";
-
-    return hasDebugParam || isLocal;
+    return hasDebugParam;
   } catch {
     return false;
   }
@@ -325,7 +334,7 @@ function hasRenderedBlock(nube?: NubeSDK) {
 
     return blocks.some((block) => typeof block === "object" && block !== null && "id" in block && block.id === BLOCK_ID);
   } catch {
-    return renderStarted;
+    return Boolean(currentContextKey);
   }
 }
 
@@ -335,7 +344,7 @@ function createDiagnosticBlock(reason: string): NubeComponent {
     borderRadius: "8px",
     direction: "col",
     gap: "6px",
-    id: BLOCK_ID,
+    id: DIAGNOSTIC_BLOCK_ID,
     padding: "14px",
     style: {
       borderColor: "#d4d4d8",
@@ -428,7 +437,7 @@ function createProductLine(label: string, product: ProductCardData): NubeCompone
   });
 }
 
-function getBundleCartItems(context: ProductContext, suggestedProduct: ProductCardData): BundleCartItemPayload[] | null {
+export function getBundleCartItems(context: ProductContext, suggestedProduct: ProductCardData): BundleCartItemPayload[] | null {
   const mainProductId = parsePositiveInteger(context.mainProduct.productId);
   const mainVariantId = parsePositiveInteger(context.mainProduct.variantId);
   const suggestedProductId = parsePositiveInteger(suggestedProduct.productId);
@@ -459,6 +468,71 @@ function clearCartAddTimeout() {
 
   clearTimeout(cartAddTimeout);
   cartAddTimeout = undefined;
+}
+
+function getContextKey(context: ProductContext) {
+  return `${context.storeId}:${context.mainProduct.productId}`;
+}
+
+async function reportStorefrontEvent(context: ProductContext, code: string) {
+  try {
+    await fetch(STOREFRONT_EVENTS_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        code,
+        productId: context.mainProduct.productId,
+        storeId: context.storeId,
+        technology: "nubesdk",
+      }),
+    });
+  } catch {
+    // Diagnostics must never affect the storefront.
+  }
+}
+
+export async function claimRenderLock(nube: NubeSDK, context: ProductContext) {
+  try {
+    const storage = nube.getBrowserAPIs().asyncSessionStorage;
+    const key = `${RENDER_LOCK_PREFIX}${getContextKey(context)}`;
+    const existing = await storage.getItem(key);
+    if (!existing) return true;
+    const lease = JSON.parse(existing) as { renderedAt?: unknown; technology?: unknown };
+    return !(
+      lease.technology === "legacy" &&
+      typeof lease.renderedAt === "number" &&
+      Date.now() - lease.renderedAt >= 0 &&
+      Date.now() - lease.renderedAt < RENDER_LEASE_MAX_AGE_MS
+    );
+  } catch {
+    return !hasRenderedBlock(nube);
+  }
+}
+
+async function recordRenderLease(nube: NubeSDK, context: ProductContext) {
+  try {
+    const storage = nube.getBrowserAPIs().asyncSessionStorage;
+    await storage.setItem(
+      `${RENDER_LOCK_PREFIX}${getContextKey(context)}`,
+      JSON.stringify({ renderedAt: Date.now(), technology: "nubesdk" }),
+    );
+  } catch {
+    // The rendered slot remains the source of truth when storage is unavailable.
+  }
+}
+
+function stopRenderLeaseHeartbeat() {
+  if (renderLeaseTimer) clearInterval(renderLeaseTimer);
+  renderLeaseTimer = undefined;
+}
+
+function startRenderLeaseHeartbeat(nube: NubeSDK, context: ProductContext) {
+  stopRenderLeaseHeartbeat();
+  void recordRenderLease(nube, context);
+  renderLeaseTimer = setInterval(() => {
+    if (currentContextKey === getContextKey(context) && hasRenderedBlock(nube)) void recordRenderLease(nube, context);
+    else stopRenderLeaseHeartbeat();
+  }, RENDER_LEASE_HEARTBEAT_MS);
 }
 
 function getCartItemQuantity(state: Readonly<NubeSDKState>, item: BundleCartItemPayload) {
@@ -507,6 +581,7 @@ function handleCartAddTimeout(nube: NubeSDK) {
   }
 
   pendingCartItems = null;
+  if (activeOffer) void reportStorefrontEvent(activeOffer.context, "cart_add_failed");
   setCartStatus(nube, "error", "Nao foi possivel confirmar o carrinho. Use o link abaixo para continuar.");
 }
 
@@ -532,6 +607,7 @@ function addBundleToCart(
   cartAddStatus = "loading";
   cartStatusMessage = null;
   renderActiveOffer(nube);
+  void reportStorefrontEvent(context, "cart_add_started");
 
   cartAddTimeout = setTimeout(() => handleCartAddTimeout(nube), CART_ADD_TIMEOUT_MS);
 
@@ -544,6 +620,7 @@ function addBundleToCart(
   } catch {
     clearCartAddTimeout();
     pendingCartItems = null;
+    void reportStorefrontEvent(context, "cart_add_failed");
     setCartStatus(nube, "error", "Nao foi possivel adicionar o conjunto. Use o link abaixo para continuar.");
   }
 }
@@ -566,6 +643,7 @@ function registerCartListeners(nube: NubeSDK) {
 
     clearCartAddTimeout();
     pendingCartItems = null;
+    void reportStorefrontEvent(activeOffer.context, "cart_add_success");
     setCartStatus(nube, "success", "Conjunto adicionado ao carrinho.");
   });
 
@@ -576,7 +654,51 @@ function registerCartListeners(nube: NubeSDK) {
 
     clearCartAddTimeout();
     pendingCartItems = null;
+    if (activeOffer) void reportStorefrontEvent(activeOffer.context, "cart_add_failed");
     setCartStatus(nube, "error", "Nao foi possivel adicionar o conjunto. Use o link abaixo para continuar.");
+  });
+}
+
+function registerVariantListener(nube: NubeSDK) {
+  if (variantListenerRegistered) return;
+  variantListenerRegistered = true;
+
+  nube.on("product:variant_selected", (state) => {
+    if (!activeOffer) return;
+    const payload = state.eventPayload;
+    if (!payload || String(payload.product_id ?? "") !== activeOffer.context.mainProduct.productId) return;
+    const variantId = parsePositiveInteger(String(payload.id ?? ""));
+    const stockManaged = payload.stock_management === true;
+    const stock = typeof payload.stock === "number" ? payload.stock : null;
+    const available = !stockManaged || stock === null || stock > 0;
+    const baseContext = activeOffer.context;
+    const compareAtPrice =
+      typeof payload.compare_at_price === "number" ? String(payload.compare_at_price) : payload.compare_at_price;
+    const promotionalPrice =
+      typeof payload.promotional_price === "number" ? String(payload.promotional_price) : payload.promotional_price;
+    const price = typeof payload.price === "number" ? String(payload.price) : payload.price;
+    const context: ProductContext = {
+      ...baseContext,
+      mainProduct: {
+        ...baseContext.mainProduct,
+        compareAtPrice: moneyFromValue(typeof compareAtPrice === "string" ? compareAtPrice : null, baseContext),
+        price: moneyFromValue(
+          typeof promotionalPrice === "string"
+            ? promotionalPrice
+            : typeof price === "string"
+              ? price
+              : null,
+          baseContext,
+        ),
+        variantId: available && variantId ? String(variantId) : null,
+      },
+    };
+    activeOffer = { ...activeOffer, context };
+    cartAddStatus = "idle";
+    cartStatusMessage = null;
+    pendingCartItems = null;
+    clearCartAddTimeout();
+    renderActiveOffer(nube);
   });
 }
 
@@ -736,7 +858,10 @@ function createOfferBlock(nube: NubeSDK, context: ProductContext, suggestedProdu
   });
 }
 
-function normalizeSuggestedProduct(context: ProductContext, response: PublicOfferResponse): ProductCardData | null {
+export function normalizeSuggestedProduct(context: ProductContext, response: PublicOfferResponse): ProductCardData | null {
+  if (response.offer?.principalProductId && response.offer.principalProductId !== context.mainProduct.productId) {
+    return null;
+  }
   const suggestedProduct = response.offer?.suggestedProduct;
 
   if (!suggestedProduct?.id || !suggestedProduct.name) {
@@ -756,10 +881,11 @@ function normalizeSuggestedProduct(context: ProductContext, response: PublicOffe
   };
 }
 
-async function fetchOffer(context: ProductContext): Promise<PublicOfferResponse> {
-  const url = `${PUBLIC_OFFERS_URL}?productId=${context.mainProduct.productId}${
-    context.storeId ? `&storeId=${context.storeId}` : ""
-  }`;
+async function fetchOffer(nube: NubeSDK, context: ProductContext): Promise<PublicOfferResponse> {
+  const debug = isDiagnosticModeRequested(nube) ? "&cj_debug=1" : "";
+  const url = `${PUBLIC_OFFERS_URL}?productId=${encodeURIComponent(context.mainProduct.productId)}&storeId=${encodeURIComponent(
+    context.storeId,
+  )}&technology=nubesdk${debug}`;
 
   const response = await fetch(url, {
     cache: "no-store",
@@ -781,37 +907,71 @@ async function fetchOffer(context: ProductContext): Promise<PublicOfferResponse>
   }
 }
 
-function renderDiagnostic(nube: NubeSDK, reason: string) {
-  if (!isSafeDiagnosticMode(nube)) {
+function renderDiagnostic(nube: NubeSDK, response: PublicOfferResponse) {
+  if (!response.diagnostic) {
     return;
   }
 
-  nube.render(TARGET_SLOT, createDiagnosticBlock(reason));
+  const diagnostic = response.diagnostic;
+  nube.render(
+    TARGET_SLOT,
+    createDiagnosticBlock(
+      `Script carregado; produto ${diagnostic.productDetected ? "detectado" : "nao detectado"}; loja ${
+        diagnostic.storeDetected ? "detectada" : "nao detectada"
+      }; resultado ${diagnostic.code ?? "indisponivel"}.`,
+    ),
+  );
 }
 
 async function renderDynamicWidget(nube: NubeSDK) {
-  if (renderStarted || hasRenderedBlock(nube)) {
-    return;
-  }
-
   const context = readProductContext(nube);
 
   if (!context) {
-    if (isPathProductDetailPage()) {
-      renderDiagnostic(nube, "PDP detectado pela URL, mas o contexto de produto NubeSDK nao ficou disponivel.");
+    requestVersion += 1;
+    pendingContextKey = "";
+    if (currentContextKey) {
+      nube.clearSlot(TARGET_SLOT);
+      stopRenderLeaseHeartbeat();
+      currentContextKey = "";
+      activeOffer = null;
     }
-
     return;
   }
 
-  renderStarted = true;
+  const contextKey = getContextKey(context);
+  if (pendingContextKey === contextKey || (currentContextKey === contextKey && hasRenderedBlock(nube))) return;
+
+  if (currentContextKey && currentContextKey !== contextKey) {
+    nube.clearSlot(TARGET_SLOT);
+    stopRenderLeaseHeartbeat();
+    currentContextKey = "";
+    activeOffer = null;
+    cartAddStatus = "idle";
+    cartStatusMessage = null;
+    pendingCartItems = null;
+    clearCartAddTimeout();
+  }
+
+  pendingContextKey = contextKey;
+  const version = ++requestVersion;
 
   try {
-    const offerResponse = await fetchOffer(context);
+    const offerResponse = await fetchOffer(nube, context);
+    const latestContext = readProductContext(nube);
+
+    if (version !== requestVersion || !latestContext || getContextKey(latestContext) !== contextKey) return;
     const suggestedProduct = normalizeSuggestedProduct(context, offerResponse);
 
     if (!suggestedProduct) {
-      renderDiagnostic(nube, "Nenhuma oferta ativa encontrada para este produto.");
+      pendingContextKey = "";
+      renderDiagnostic(nube, offerResponse);
+      return;
+    }
+
+    if (!(await claimRenderLock(nube, context))) {
+      pendingContextKey = "";
+      void reportStorefrontEvent(context, "widget_already_rendered");
+      setTimeout(() => void renderDynamicWidget(nube), RENDER_LEASE_MAX_AGE_MS);
       return;
     }
 
@@ -821,11 +981,21 @@ async function renderDynamicWidget(nube: NubeSDK) {
     pendingCartItems = null;
     clearCartAddTimeout();
     registerCartListeners(nube);
+    registerVariantListener(nube);
     nube.render(TARGET_SLOT, createOfferBlock(nube, context, suggestedProduct));
+    if (!hasRenderedBlock(nube)) throw new Error("NubeSDK did not confirm the rendered block.");
+    currentContextKey = contextKey;
+    pendingContextKey = "";
+    startRenderLeaseHeartbeat(nube, context);
+    void reportStorefrontEvent(context, "widget_rendered");
   } catch {
-    renderStarted = false;
+    pendingContextKey = "";
+    activeOffer = null;
+    cartAddStatus = "idle";
+    cartStatusMessage = null;
+    pendingCartItems = null;
+    clearCartAddTimeout();
     logWarningOnce("dynamic_render_failed");
-    renderDiagnostic(nube, "Falha segura ao carregar a oferta dinamica.");
   }
 }
 
@@ -855,6 +1025,12 @@ function scheduleAfterCriticalPaint(render: () => void) {
 }
 
 export function App(nube: NubeSDK) {
+  nube.on("page:loaded", () => {
+    void renderDynamicWidget(nube);
+  });
+  nube.on("location:updated", () => {
+    void renderDynamicWidget(nube);
+  });
   scheduleAfterCriticalPaint(() => {
     void renderDynamicWidget(nube);
   });

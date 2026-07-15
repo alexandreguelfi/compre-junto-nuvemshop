@@ -1,4 +1,10 @@
 import { prisma } from "@/src/lib/prisma";
+import {
+  canAccessCommercialFeatures,
+  hasCommercialEntitlement,
+  normalizeTimeBoundBillingStatus,
+  readBoundedTrialDays,
+} from "@/src/lib/billing/commercial-policy";
 
 export const COMPRE_JUNTO_PLAN = {
   name: "Compre Junto Pro",
@@ -73,12 +79,6 @@ function cleanEnv(value: string | undefined): string | null {
   return value?.trim() || null;
 }
 
-function readPositiveInteger(value: string | undefined, fallback: number): number {
-  const parsed = Number.parseInt(value ?? "", 10);
-
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-}
-
 function readPositiveNumber(value: string | undefined, fallback: number): number {
   const normalized = value?.replace(",", ".") ?? "";
   const parsed = Number.parseFloat(normalized);
@@ -112,10 +112,6 @@ function formatTrialMessage(daysRemaining: number) {
   return `Período grátis: ${daysRemaining} ${unit}.`;
 }
 
-function isActiveBillingStatus(status: BillingStatus) {
-  return status === "ACTIVE" || status === "TRIAL";
-}
-
 function normalizeSubscriptionStatus(
   subscription: BillingSubscriptionFields,
   now: Date,
@@ -123,11 +119,7 @@ function normalizeSubscriptionStatus(
 ): BillingStatus {
   const trialEndsAt = subscription.trialEndsAt ?? fallbackTrialEndsAt;
 
-  if (subscription.status === "TRIAL" && !isTrialActive(now, trialEndsAt)) {
-    return "PAST_DUE";
-  }
-
-  return subscription.status;
+  return normalizeTimeBoundBillingStatus(subscription.status, trialEndsAt, now);
 }
 
 function resolveLegacyBillingStatus(store: StoreCommercialFields, now: Date, trialEndsAt: Date): BillingStatus {
@@ -187,7 +179,7 @@ function getStatusMessage(args: {
 
 export function getBillingPlanConfig(): BillingPlanConfig {
   const price = readPositiveNumber(process.env.COMPRE_JUNTO_PRICE, COMPRE_JUNTO_PLAN.price);
-  const trialDays = readPositiveInteger(process.env.COMPRE_JUNTO_TRIAL_DAYS, COMPRE_JUNTO_PLAN.trialDays);
+  const trialDays = readBoundedTrialDays(process.env.COMPRE_JUNTO_TRIAL_DAYS, COMPRE_JUNTO_PLAN.trialDays);
 
   return {
     enforcementEnabled: process.env.BILLING_ENFORCEMENT_ENABLED?.trim().toLowerCase() === "true",
@@ -256,8 +248,8 @@ export function resolveStoreCommercialAccess(
   const status = subscription
     ? normalizeSubscriptionStatus(subscription, now, fallbackTrialEndsAt)
     : resolveLegacyBillingStatus(store, now, fallbackTrialEndsAt);
-  const hasEntitlement = isActiveBillingStatus(status);
-  const canUseApp = config.enforcementEnabled ? hasEntitlement : true;
+  const hasEntitlement = hasCommercialEntitlement(status);
+  const canUseApp = canAccessCommercialFeatures(status, config.enforcementEnabled);
 
   return {
     canCreateOffer: canUseApp,

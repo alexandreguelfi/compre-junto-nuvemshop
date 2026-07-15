@@ -14,7 +14,7 @@ export default async function NewOfferPage() {
   const commercialAccess = store ? await getCommercialStatus(store.id) : null;
   const canCreateOffer = Boolean(commercialAccess?.canCreateOffer);
   const productsResult = store && canCreateOffer
-    ? await listConnectedStoreProducts().then(
+    ? await listConnectedStoreProducts({ storeId: store.id }).then(
         (products) => ({
           products,
           productsLoadFailed: false,
