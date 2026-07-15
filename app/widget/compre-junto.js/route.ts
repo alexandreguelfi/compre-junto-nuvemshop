@@ -2,6 +2,11 @@ export const widgetScript = String.raw`
 (function () {
   "use strict";
 
+  var bootstrapScript = document.currentScript;
+  if (bootstrapScript && typeof bootstrapScript.setAttribute === "function") {
+    bootstrapScript.setAttribute("data-compre-junto-bootstrap", "legacy");
+  }
+
   var ROOT_ID = "compre-junto-widget-root";
   var LOCK_PREFIX = "compre-junto:render-lock:";
   var APP_ORIGIN = "https://compre-junto-nuvemshop-production.up.railway.app";
@@ -33,7 +38,10 @@ export const widgetScript = String.raw`
   }
 
   function getCurrentScript() {
+    if (bootstrapScript) return bootstrapScript;
     if (document.currentScript) return document.currentScript;
+    var markedScript = document.querySelector('script[data-compre-junto-bootstrap="legacy"]');
+    if (markedScript) return markedScript;
     var scripts = document.getElementsByTagName("script");
     for (var index = scripts.length - 1; index >= 0; index -= 1) {
       if ((scripts[index].src || "").indexOf("/widget/compre-junto.js") >= 0) return scripts[index];

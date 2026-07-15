@@ -136,13 +136,20 @@ test("render leases remain store/product scoped across A to B to A navigation", 
 test("legacy script uses the official app origin when Nuvemshop serves it from apps-scripts", async () => {
   const urls = [];
   const beacons = [];
+  const scriptAttributes = new Map();
   const script = {
     dataset: { productId: "352812666", storeId: "7895581" },
     getAttribute(name) {
-      return name === "data-product-id" ? "352812666" : name === "data-store-id" ? "7895581" : "";
+      return name === "data-product-id"
+        ? "352812666"
+        : name === "data-store-id"
+          ? "7895581"
+          : scriptAttributes.get(name) ?? "";
     },
+    setAttribute(name, value) { scriptAttributes.set(name, String(value)); },
     src: "https://apps-scripts.tiendanube.com/store/7895581/script/8403.js",
   };
+  const timers = [];
   const storage = new Map();
   const makeElement = () => {
     const attributes = new Map();
@@ -202,11 +209,15 @@ test("legacy script uses the official app origin when Nuvemshop serves it from a
     navigator: { sendBeacon: (url) => void beacons.push(String(url)) },
     clearInterval() {},
     setInterval: () => 1,
-    setTimeout: (callback) => (callback(), 1),
+    setTimeout: (callback) => (timers.push(callback), timers.length),
     window,
   };
   window.window = window;
   vm.runInNewContext(widgetScript, context);
+  assert.equal(urls.length, 0);
+  assert.equal(script.getAttribute("data-compre-junto-bootstrap"), "legacy");
+  document.currentScript = null;
+  while (timers.length) timers.shift()();
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(urls.length, 1);
   assert.match(urls[0], /^https:\/\/compre-junto-nuvemshop-production\.up\.railway\.app\/api\/public\/offers\?/);
@@ -215,6 +226,7 @@ test("legacy script uses the official app origin when Nuvemshop serves it from a
   assert.match(urls[0], /technology=legacy/);
   assert.deepEqual(beacons, ["https://compre-junto-nuvemshop-production.up.railway.app/api/public/storefront-events"]);
   assert.equal([...urls, ...beacons].some((url) => url.includes("apps-scripts.tiendanube.com/api/public/")), false);
+  assert.notEqual(document.getElementById("compre-junto-widget-root"), null);
 });
 
 test("storefront scripts include safe error, timeout, cart and SPA handling", async () => {
@@ -228,6 +240,7 @@ test("storefront scripts include safe error, timeout, cart and SPA handling", as
   assert.doesNotMatch(widgetScript, /Tiendanube\.addToCart/);
   assert.match(widgetScript, /Ver produto recomendado/);
   assert.match(widgetScript, /recordRendered\(context\)/);
+  assert.match(widgetScript, /var bootstrapScript = document\.currentScript/);
   assert.match(widgetScript, /https:\/\/compre-junto-nuvemshop-production\.up\.railway\.app/);
   assert.doesNotMatch(widgetScript, /getDataValue\(script, "apiOrigin"\) \|\| script\.src/);
   assert.doesNotMatch(widgetScript, /accessToken|client_secret|Authorization/);
