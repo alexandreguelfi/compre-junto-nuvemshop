@@ -1,16 +1,10 @@
 import crypto from "node:crypto";
 
 import { getEnv, getNuvemshopCallbackUrl } from "@/src/lib/env";
+import { createSignedInstallState, validateSignedInstallState } from "@/src/lib/nuvemshop/install-state";
+import { buildTokenExchangeRequest, NUVEMSHOP_TOKEN_URL } from "@/src/lib/nuvemshop/token-request";
 
 const NUVEMSHOP_AUTHORIZE_BASE_URL = "https://www.nuvemshop.com.br/apps/";
-const NUVEMSHOP_TOKEN_URL = "https://www.tiendanube.com/apps/authorize/token";
-const INSTALL_STATE_MAX_AGE_MS = 10 * 60 * 1000;
-
-type InstallStatePayload = {
-  issuedAt: number;
-  nonce: string;
-  redirectUri: string;
-};
 
 export type NuvemshopToken = {
   accessToken: string;
@@ -32,33 +26,11 @@ function getStateSecret(): string {
   return getEnv().COMPRE_JUNTO_ADMIN_SECRET;
 }
 
-function base64UrlJson(value: unknown): string {
-  return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
-}
-
-function signPayload(payload: string): string {
-  return crypto.createHmac("sha256", getStateSecret()).update(payload).digest("base64url");
-}
-
-function safeEqual(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-
-  if (leftBuffer.length !== rightBuffer.length) {
-    return false;
-  }
-
-  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
-}
-
 export function createInstallState(): string {
-  const payload = base64UrlJson({
-    issuedAt: Date.now(),
-    nonce: crypto.randomBytes(24).toString("base64url"),
+  return createSignedInstallState({
     redirectUri: getNuvemshopCallbackUrl(),
-  } satisfies InstallStatePayload);
-
-  return `${payload}.${signPayload(payload)}`;
+    secret: getStateSecret(),
+  });
 }
 
 export function validateInstallState(state: string | null): boolean {
@@ -66,21 +38,10 @@ export function validateInstallState(state: string | null): boolean {
     return false;
   }
 
-  const [payload, signature] = state.split(".");
-
-  if (!payload || !signature || !safeEqual(signature, signPayload(payload))) {
-    return false;
-  }
-
-  try {
-    const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as Partial<InstallStatePayload>;
-    const issuedAt = typeof parsed.issuedAt === "number" ? parsed.issuedAt : 0;
-    const redirectUri = typeof parsed.redirectUri === "string" ? parsed.redirectUri : "";
-
-    return Date.now() - issuedAt <= INSTALL_STATE_MAX_AGE_MS && redirectUri === getNuvemshopCallbackUrl();
-  } catch {
-    return false;
-  }
+  return validateSignedInstallState(state, {
+    redirectUri: getNuvemshopCallbackUrl(),
+    secret: getStateSecret(),
+  });
 }
 
 export function buildInstallUrl(): URL {
@@ -135,20 +96,13 @@ async function hasResponseBody(response: Response): Promise<boolean> {
 
 export async function exchangeCodeForToken(code: string): Promise<NuvemshopToken> {
   const env = getEnv();
-  const response = await fetch(NUVEMSHOP_TOKEN_URL, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      client_id: env.NUVEMSHOP_CLIENT_ID,
-      client_secret: env.NUVEMSHOP_CLIENT_SECRET,
-      grant_type: "authorization_code",
-      code,
+  const response = await fetch(
+    NUVEMSHOP_TOKEN_URL,
+    buildTokenExchangeRequest(code, {
+      clientId: env.NUVEMSHOP_CLIENT_ID,
+      clientSecret: env.NUVEMSHOP_CLIENT_SECRET,
     }),
-    cache: "no-store",
-  });
+  );
 
   if (!response.ok) {
     throw new NuvemshopAuthError("Nuvemshop token exchange failed", {
