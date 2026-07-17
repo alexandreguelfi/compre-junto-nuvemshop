@@ -1,5 +1,10 @@
 import type { NubeComponent, NubeSDK, NubeSDKState, ProductDetails, ProductVariant } from "@tiendanube/nube-sdk-types";
 
+import {
+  buildStorefrontOfferRequestKey,
+  STOREFRONT_REQUEST_STATE_KEY,
+} from "../../src/lib/storefront/browser-request-state.ts";
+
 const BLOCK_ID = "compre-junto-widget-root";
 const DIAGNOSTIC_BLOCK_ID = "compre-junto-widget-diagnostic";
 const TARGET_SLOT = "after_product_detail_add_to_cart";
@@ -31,7 +36,7 @@ type IdleCallbackOptions = {
 type IdleCallback = (callback: (deadline: IdleDeadline) => void, options?: IdleCallbackOptions) => unknown;
 
 type BrowserGlobals = typeof globalThis & {
-  __compreJuntoNubeRequests?: OfferRequestState;
+  [STOREFRONT_REQUEST_STATE_KEY]?: OfferRequestState;
   location?: Location;
   requestIdleCallback?: IdleCallback;
 };
@@ -43,12 +48,7 @@ type OfferRequestEntry = {
 
 type OfferRequestState = {
   entries: Map<string, OfferRequestEntry>;
-  inFlight: Map<string, Promise<OfferFetchResult>>;
-};
-
-type OfferFetchResult = {
-  response: PublicOfferResponse;
-  ttlMs: number;
+  inFlight: Map<string, Promise<PublicOfferResponse>>;
 };
 
 type Money = {
@@ -131,10 +131,10 @@ function getBrowserGlobals() {
 
 function getOfferRequestState() {
   const globals = getBrowserGlobals();
-  if (!globals.__compreJuntoNubeRequests) {
-    globals.__compreJuntoNubeRequests = { entries: new Map(), inFlight: new Map() };
+  if (!globals[STOREFRONT_REQUEST_STATE_KEY]) {
+    globals[STOREFRONT_REQUEST_STATE_KEY] = { entries: new Map(), inFlight: new Map() };
   }
-  return globals.__compreJuntoNubeRequests;
+  return globals[STOREFRONT_REQUEST_STATE_KEY];
 }
 
 function component(value: Record<string, unknown>): NubeComponent {
@@ -514,6 +514,8 @@ async function reportStorefrontEvent(context: ProductContext, code: string) {
         storeId: context.storeId,
         technology: "nubesdk",
       }),
+      credentials: "omit",
+      keepalive: true,
     });
   } catch {
     // Diagnostics must never affect the storefront.
@@ -911,9 +913,14 @@ export function normalizeSuggestedProduct(context: ProductContext, response: Pub
 }
 
 async function fetchOffer(nube: NubeSDK, context: ProductContext): Promise<PublicOfferResponse> {
-  const contextKey = getContextKey(context);
-  const debug = isDiagnosticModeRequested(nube) ? "&cj_debug=1" : "";
-  const requestKey = `${contextKey}:${debug ? "debug" : "standard"}`;
+  const diagnosticMode = isDiagnosticModeRequested(nube);
+  const debug = diagnosticMode ? "&cj_debug=1" : "";
+  const requestKey = buildStorefrontOfferRequestKey({
+    diagnosticMode,
+    productId: context.mainProduct.productId,
+    storeId: context.storeId,
+    technology: "nubesdk",
+  });
   const url = `${PUBLIC_OFFERS_URL}?productId=${encodeURIComponent(context.mainProduct.productId)}&storeId=${encodeURIComponent(
     context.storeId,
   )}&technology=nubesdk${debug}`;
@@ -928,37 +935,47 @@ async function fetchOffer(nube: NubeSDK, context: ProductContext): Promise<Publi
   const pending = state.inFlight.get(requestKey);
   if (pending) {
     void reportStorefrontEvent(context, "offer_request_deduplicated");
-    return (await pending).response;
+    return pending;
   }
 
   const request = (async () => {
+    let responsePayload: PublicOfferResponse;
+    let ttlMs: number;
     try {
-      const response = await fetch(url, { cache: "no-store" });
+      const response = await fetch(url, { cache: "no-store", credentials: "omit" });
       if (!response.ok) {
         logWarningOnce("offer_lookup_failed", { status: response.status });
-        return { response: { offer: null }, ttlMs: OFFER_FAILURE_TTL_MS };
-      }
-      try {
-        return { response: (await response.json()) as PublicOfferResponse, ttlMs: OFFER_REQUEST_TTL_MS };
-      } catch {
-        logWarningOnce("offer_response_invalid");
-        return { response: { offer: null }, ttlMs: OFFER_FAILURE_TTL_MS };
+        responsePayload = { offer: null };
+        ttlMs = OFFER_FAILURE_TTL_MS;
+      } else {
+        try {
+          responsePayload = (await response.json()) as PublicOfferResponse;
+          ttlMs = OFFER_REQUEST_TTL_MS;
+        } catch {
+          logWarningOnce("offer_response_invalid");
+          responsePayload = { offer: null };
+          ttlMs = OFFER_FAILURE_TTL_MS;
+        }
       }
     } catch {
       logWarningOnce("offer_lookup_failed");
-      return { response: { offer: null }, ttlMs: OFFER_FAILURE_TTL_MS };
+      responsePayload = { offer: null };
+      ttlMs = OFFER_FAILURE_TTL_MS;
     }
+
+    state.entries.set(requestKey, { expiresAt: Date.now() + ttlMs, response: responsePayload });
+    return responsePayload;
   })();
 
+  // Registration is synchronous and happens before this function awaits network or parsing work.
   state.inFlight.set(requestKey, request);
   try {
-    const result = await request;
-    state.entries.set(requestKey, { expiresAt: Date.now() + result.ttlMs, response: result.response });
+    const response = await request;
     for (const [key, entry] of state.entries) {
       if (entry.expiresAt <= Date.now() || state.entries.size > MAX_OFFER_REQUEST_ENTRIES) state.entries.delete(key);
       if (state.entries.size <= MAX_OFFER_REQUEST_ENTRIES) break;
     }
-    return result.response;
+    return response;
   } finally {
     if (state.inFlight.get(requestKey) === request) state.inFlight.delete(requestKey);
   }

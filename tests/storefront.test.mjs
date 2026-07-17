@@ -11,6 +11,10 @@ import {
   readProductContext,
 } from "../storefront-nube/src/main.ts";
 import { widgetScript } from "../app/widget/compre-junto.js/route.ts";
+import {
+  buildStorefrontOfferRequestKey,
+  STOREFRONT_REQUEST_STATE_KEY,
+} from "../src/lib/storefront/browser-request-state.ts";
 
 function product(id, variantId = id * 10) {
   return {
@@ -137,8 +141,7 @@ test("render leases remain store/product scoped across A to B to A navigation", 
 });
 
 test("legacy script uses the official app origin when Nuvemshop serves it from apps-scripts", async () => {
-  const urls = [];
-  const beacons = [];
+  const requests = [];
   const scriptAttributes = new Map();
   const script = {
     dataset: { productId: "352812666", storeId: "7895581" },
@@ -197,8 +200,8 @@ test("legacy script uses the official app origin when Nuvemshop serves it from a
     URLSearchParams,
     console,
     document,
-    fetch: async (url) => {
-      urls.push(String(url));
+    fetch: async (url, init = {}) => {
+      requests.push({ init, url: String(url) });
       return {
         json: async () => ({
           offer: {
@@ -209,7 +212,7 @@ test("legacy script uses the official app origin when Nuvemshop serves it from a
       };
     },
     Intl,
-    navigator: { sendBeacon: (url) => void beacons.push(String(url)) },
+    navigator: {},
     clearInterval() {},
     setInterval: () => 1,
     setTimeout: (callback) => (timers.push(callback), timers.length),
@@ -217,24 +220,119 @@ test("legacy script uses the official app origin when Nuvemshop serves it from a
   };
   window.window = window;
   vm.runInNewContext(widgetScript, context);
-  assert.equal(urls.length, 0);
+  assert.equal(requests.length, 0);
   assert.equal(script.getAttribute("data-compre-junto-bootstrap"), "legacy");
   document.currentScript = null;
   while (timers.length) timers.shift()();
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(urls.length, 1);
-  assert.match(urls[0], /^https:\/\/compre-junto-nuvemshop-production\.up\.railway\.app\/api\/public\/offers\?/);
-  assert.match(urls[0], /productId=352812666/);
-  assert.match(urls[0], /storeId=7895581/);
-  assert.match(urls[0], /technology=legacy/);
-  assert.deepEqual(beacons, ["https://compre-junto-nuvemshop-production.up.railway.app/api/public/storefront-events"]);
-  assert.equal([...urls, ...beacons].some((url) => url.includes("apps-scripts.tiendanube.com/api/public/")), false);
+  const offerRequests = requests.filter(({ url }) => url.includes("/api/public/offers"));
+  const eventRequests = requests.filter(({ url }) => url.includes("/api/public/storefront-events"));
+  assert.equal(offerRequests.length, 1);
+  assert.match(offerRequests[0].url, /^https:\/\/compre-junto-nuvemshop-production\.up\.railway\.app\/api\/public\/offers\?/);
+  assert.match(offerRequests[0].url, /productId=352812666/);
+  assert.match(offerRequests[0].url, /storeId=7895581/);
+  assert.match(offerRequests[0].url, /technology=legacy/);
+  assert.equal(offerRequests[0].init.credentials, "omit");
+  assert.equal(eventRequests.length, 1);
+  assert.equal(eventRequests[0].init.credentials, "omit");
+  assert.equal(requests.some(({ url }) => url.includes("apps-scripts.tiendanube.com/api/public/")), false);
   assert.notEqual(document.getElementById("compre-junto-widget-root"), null);
+});
+
+test("three concurrent legacy initializations and two bundle executions share one response and one widget", async () => {
+  const listeners = new Map();
+  const timers = [];
+  const requestCalls = [];
+  const responsePayload = {
+    offer: {
+      principalProduct: { id: "352812666", name: "Principal", price: "10.00" },
+      suggestedProduct: { id: "352812610", name: "Sugerido", path: "/produtos/sugerido/", price: "20.00" },
+    },
+  };
+  let releaseOffer;
+  const offerResponse = new Promise((resolve) => { releaseOffer = resolve; });
+  const script = {
+    dataset: { productId: "352812666", storeId: "7895581" },
+    getAttribute(name) { return name === "data-product-id" ? "352812666" : name === "data-store-id" ? "7895581" : ""; },
+    setAttribute() {},
+    src: "https://apps-scripts.tiendanube.com/compre-junto-pro/compre-junto-tema-legado/4.js",
+  };
+  const makeElement = () => {
+    const attributes = new Map();
+    const element = {
+      appendChild(child) { this.children.push(child); child.parentNode = this; return child; },
+      children: [],
+      getAttribute(name) { return attributes.get(name) ?? null; },
+      remove() {
+        if (this.parentNode) this.parentNode.children = this.parentNode.children.filter((child) => child !== this);
+      },
+      setAttribute(name, value) { attributes.set(name, String(value)); },
+      style: {},
+    };
+    Object.defineProperty(element, "innerHTML", { set() { element.children = []; } });
+    return element;
+  };
+  const container = makeElement();
+  const window = {
+    addEventListener(name, callback) {
+      const callbacks = listeners.get(name) ?? [];
+      callbacks.push(callback);
+      listeners.set(name, callbacks);
+    },
+    location: { href: "https://loja.example/produtos/x/", search: "" },
+    sessionStorage: { getItem: () => null, setItem() {} },
+  };
+  const document = {
+    currentScript: script,
+    addEventListener() {},
+    createElement: makeElement,
+    getElementById(id) { return container.children.find((element) => element.id === id) ?? null; },
+    getElementsByTagName() { return [script]; },
+    querySelector(selector) { return selector === "[data-compre-junto-widget]" ? container : null; },
+  };
+  const context = {
+    URL,
+    URLSearchParams,
+    document,
+    fetch: async (url, init = {}) => {
+      const value = String(url);
+      requestCalls.push({ init, url: value });
+      if (value.includes("/api/public/offers")) return offerResponse;
+      return { ok: true, json: async () => ({ ok: true }) };
+    },
+    Intl,
+    Map,
+    navigator: {},
+    clearInterval() {},
+    setInterval: () => 1,
+    setTimeout: (callback) => (timers.push(callback), timers.length),
+    window,
+  };
+  window.window = window;
+
+  vm.runInNewContext(widgetScript, context);
+  vm.runInNewContext(widgetScript, context);
+  for (const callback of listeners.get("page:loaded") ?? []) callback();
+  while (timers.length) timers.shift()();
+
+  assert.equal(requestCalls.filter(({ url }) => url.includes("/api/public/offers")).length, 1);
+  releaseOffer({ ok: true, json: async () => responsePayload });
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const requestKey = buildStorefrontOfferRequestKey({
+    diagnosticMode: false,
+    productId: "352812666",
+    storeId: "7895581",
+    technology: "legacy",
+  });
+  assert.equal(window[STOREFRONT_REQUEST_STATE_KEY].entries.get(requestKey).response, responsePayload);
+  assert.equal(window[STOREFRONT_REQUEST_STATE_KEY].inFlight.size, 0);
+  assert.equal(container.children.filter((element) => element.id === "compre-junto-widget-root").length, 1);
 });
 
 test("legacy checks NubeSDK ownership before network and never creates a periodic retry", async () => {
   const urls = [];
-  const beacons = [];
   const timers = [];
   const listeners = new Map();
   let observerCount = 0;
@@ -271,7 +369,7 @@ test("legacy checks NubeSDK ownership before network and never creates a periodi
     Intl,
     Map,
     MutationObserver: class { constructor() { observerCount += 1; } },
-    navigator: { sendBeacon: (url) => void beacons.push(String(url)) },
+    navigator: {},
     clearInterval() {},
     setInterval: () => 1,
     setTimeout: (callback) => (timers.push(callback), timers.length),
@@ -289,7 +387,7 @@ test("legacy checks NubeSDK ownership before network and never creates a periodi
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(urls.filter((url) => url.includes("/api/public/offers")).length, 0);
-  assert.equal(beacons.length, 1);
+  assert.equal(urls.filter((url) => url.includes("/api/public/storefront-events")).length, 1);
   assert.equal(observerCount, 0);
   assert.equal(timers.length, 0);
 });
@@ -389,7 +487,7 @@ test("NubeSDK deduplicates initial events, SPA navigation, A return and variant 
     await new Promise((resolve) => setImmediate(resolve));
   };
 
-  delete globalThis.__compreJuntoNubeRequests;
+  delete globalThis[STOREFRONT_REQUEST_STATE_KEY];
   globalThis.requestIdleCallback = (callback) => callback({ didTimeout: false, timeRemaining: () => 10 });
   globalThis.fetch = async (url) => {
     const value = String(url);
@@ -433,7 +531,7 @@ test("NubeSDK deduplicates initial events, SPA navigation, A return and variant 
     globalThis.fetch = originalFetch;
     if (originalIdle) globalThis.requestIdleCallback = originalIdle;
     else delete globalThis.requestIdleCallback;
-    delete globalThis.__compreJuntoNubeRequests;
+    delete globalThis[STOREFRONT_REQUEST_STATE_KEY];
   }
 });
 
@@ -463,7 +561,7 @@ test("NubeSDK caches a temporary offer failure and performs no aggressive retry"
     await new Promise((resolve) => setImmediate(resolve));
   };
 
-  delete globalThis.__compreJuntoNubeRequests;
+  delete globalThis[STOREFRONT_REQUEST_STATE_KEY];
   Date.now = () => now;
   globalThis.requestIdleCallback = (callback) => callback({ didTimeout: false, timeRemaining: () => 10 });
   globalThis.fetch = async (url) => {
@@ -506,7 +604,7 @@ test("NubeSDK caches a temporary offer failure and performs no aggressive retry"
     globalThis.fetch = originalFetch;
     if (originalIdle) globalThis.requestIdleCallback = originalIdle;
     else delete globalThis.requestIdleCallback;
-    delete globalThis.__compreJuntoNubeRequests;
+    delete globalThis[STOREFRONT_REQUEST_STATE_KEY];
   }
 });
 

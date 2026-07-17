@@ -25,6 +25,11 @@ import {
 import { classifyMatchingOffers } from "../src/lib/storefront/offer-policy.ts";
 import { resolveStoreCandidate } from "../src/lib/storefront/store-resolution.ts";
 import { createShortLivedCache } from "../src/lib/storefront/short-lived-cache.ts";
+import { resolvePublicTelemetryCors } from "../src/lib/storefront/public-telemetry-cors.ts";
+import {
+  OPTIONS as storefrontEventsOptions,
+  POST as storefrontEventsPost,
+} from "../app/api/public/storefront-events/route.ts";
 
 test("read_products is sufficient because storefront policy contains no product mutation", async () => {
   const source = await import("node:fs/promises").then(({ readFile }) =>
@@ -191,6 +196,58 @@ test("storefront event route enforces JSON, 1 KiB bodies and bounded deduplicati
   assert.match(source, /MAX_DEDUPE_ENTRIES = 500/);
   assert.match(source, /content-type/);
   assert.match(source, /status: 415/);
+  assert.match(source, /resolvePublicTelemetryCors\(request\)/);
+});
+
+test("public telemetry CORS accepts secure storefronts, rejects invalid origins and never combines credentials with wildcard", () => {
+  const storeOrigin = "https://lojadetestedeaplicativos.lojavirtualnuvem.com.br";
+  const allowed = resolvePublicTelemetryCors(new Request("https://app.example/api", { headers: { Origin: storeOrigin } }));
+  assert.equal(allowed.allowed, true);
+  assert.equal(allowed.headers["Access-Control-Allow-Origin"], storeOrigin);
+  assert.equal(allowed.headers.Vary, "Origin");
+  assert.equal(allowed.headers["Access-Control-Allow-Credentials"], "true");
+  assert.notEqual(allowed.headers["Access-Control-Allow-Origin"], "*");
+
+  const invalid = resolvePublicTelemetryCors(new Request("https://app.example/api", { headers: { Origin: "null" } }));
+  assert.equal(invalid.allowed, false);
+  assert.equal(invalid.headers["Access-Control-Allow-Origin"], undefined);
+
+  const preflight = resolvePublicTelemetryCors(new Request("https://app.example/api", {
+    method: "OPTIONS",
+    headers: { Origin: storeOrigin, "Access-Control-Request-Method": "POST" },
+  }));
+  assert.equal(preflight.allowed, true);
+  assert.equal(preflight.headers["Access-Control-Allow-Methods"], "POST, OPTIONS");
+  assert.equal(preflight.headers["Access-Control-Allow-Headers"], "Content-Type");
+});
+
+test("storefront telemetry handles preflight and POST from the published store origin", async () => {
+  const storeOrigin = "https://lojadetestedeaplicativos.lojavirtualnuvem.com.br";
+  const optionsResponse = await storefrontEventsOptions(new Request("https://app.example/api/public/storefront-events", {
+    method: "OPTIONS",
+    headers: { Origin: storeOrigin, "Access-Control-Request-Method": "POST" },
+  }));
+  assert.equal(optionsResponse.status, 204);
+  assert.equal(optionsResponse.headers.get("access-control-allow-origin"), storeOrigin);
+  assert.equal(optionsResponse.headers.get("access-control-allow-credentials"), "true");
+  assert.equal(optionsResponse.headers.get("vary"), "Origin");
+
+  const postResponse = await storefrontEventsPost(new Request("https://app.example/api/public/storefront-events", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: storeOrigin },
+    body: JSON.stringify({ code: "offer_request_deduplicated", productId: "352812666", storeId: "7895581", technology: "legacy" }),
+  }));
+  assert.equal(postResponse.status, 200);
+  assert.equal(postResponse.headers.get("access-control-allow-origin"), storeOrigin);
+  assert.deepEqual(await postResponse.json(), { ok: true });
+
+  const rejectedResponse = await storefrontEventsPost(new Request("https://app.example/api/public/storefront-events", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: "null" },
+    body: "{}",
+  }));
+  assert.equal(rejectedResponse.status, 403);
+  assert.equal(rejectedResponse.headers.get("access-control-allow-origin"), null);
 });
 
 test("script IDs are environment-shaped and pagination remains bounded and explicit", () => {

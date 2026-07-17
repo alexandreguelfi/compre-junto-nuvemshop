@@ -1,3 +1,5 @@
+import { STOREFRONT_REQUEST_STATE_KEY } from "../../../src/lib/storefront/browser-request-state.ts";
+
 export const widgetScript = String.raw`
 (function () {
   "use strict";
@@ -16,7 +18,7 @@ export const widgetScript = String.raw`
   // Shared across legacy script instances; valid responses live for one minute and failures for ten seconds.
   var REQUEST_TTL_MS = 60000;
   var FAILURE_TTL_MS = 10000;
-  var REQUEST_STATE_KEY = "__compreJuntoLegacyRequests";
+  var REQUEST_STATE_KEY = "${STOREFRONT_REQUEST_STATE_KEY}";
   var technology = "legacy";
   var requestVersion = 0;
   var activeKey = "";
@@ -28,6 +30,7 @@ export const widgetScript = String.raw`
     if (!window[REQUEST_STATE_KEY]) {
       window[REQUEST_STATE_KEY] = { entries: new Map(), historyPatched: false, inFlight: new Map(), suppressions: new Map() };
     }
+    if (!window[REQUEST_STATE_KEY].suppressions) window[REQUEST_STATE_KEY].suppressions = new Map();
     return window[REQUEST_STATE_KEY];
   }
 
@@ -159,11 +162,13 @@ export const widgetScript = String.raw`
     if (!url) return;
     var body = JSON.stringify({ code: code, productId: context.productId, storeId: context.storeId, technology: technology });
     try {
-      if (navigator.sendBeacon) {
-        navigator.sendBeacon(url, new Blob([body], { type: "application/json" }));
-        return;
-      }
-      fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: body, keepalive: true }).catch(function () {});
+      fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: body,
+        credentials: "omit",
+        keepalive: true
+      }).catch(function () {});
     } catch (error) {}
   }
 
@@ -420,18 +425,23 @@ export const widgetScript = String.raw`
     }
 
     var state = getRequestState();
-    var requestKey = context.key + (debugRequested() ? ":debug" : ":standard");
+    var requestKey = context.storeId + ":" + context.productId + ":" + technology + ":" +
+      (debugRequested() ? "diagnostic" : "standard");
     var cached = state.entries.get(requestKey);
     var request;
     if (cached && cached.expiresAt > Date.now()) {
       report(script, context, "offer_request_deduplicated");
-      request = Promise.resolve(cached.payload);
+      request = Promise.resolve(cached.response);
     } else if (state.inFlight.has(requestKey)) {
       report(script, context, "offer_request_deduplicated");
       request = state.inFlight.get(requestKey);
     } else {
       if (cached) state.entries.delete(requestKey);
-      request = fetch(buildOfferUrl(script, context), { headers: { Accept: "application/json" }, cache: "no-store" })
+      request = fetch(buildOfferUrl(script, context), {
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+        credentials: "omit"
+      })
         .then(function (response) {
           if (response.ok === false) return { failed: true, payload: null };
           return response.json()
@@ -442,10 +452,11 @@ export const widgetScript = String.raw`
         .then(function (result) {
           state.entries.set(requestKey, {
             expiresAt: Date.now() + (result.failed ? FAILURE_TTL_MS : REQUEST_TTL_MS),
-            payload: result.payload
+            response: result.payload
           });
           return result.payload;
         });
+      // Registration is synchronous and precedes every asynchronous continuation above.
       state.inFlight.set(requestKey, request);
       var clearInFlight = function () {
         if (state.inFlight.get(requestKey) === request) state.inFlight.delete(requestKey);

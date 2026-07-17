@@ -1,25 +1,17 @@
-import { type NextRequest, NextResponse } from "next/server";
-
 import {
   parseStorefrontEventPayload,
-} from "@/src/lib/storefront/diagnostics";
+} from "../../../../src/lib/storefront/diagnostics.ts";
+import { resolvePublicTelemetryCors } from "../../../../src/lib/storefront/public-telemetry-cors.ts";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-
-const headers = {
-  "Access-Control-Allow-Headers": "Content-Type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Origin": "*",
-  "Cache-Control": "no-store",
-};
 
 const MAX_BODY_BYTES = 1024;
 const DEDUPE_WINDOW_MS = 15_000;
 const MAX_DEDUPE_ENTRIES = 500;
 const recentEvents = new Map<string, number>();
 
-async function readSmallJsonBody(request: NextRequest): Promise<unknown> {
+async function readSmallJsonBody(request: Request): Promise<unknown> {
   const contentLength = request.headers.get("content-length");
   if (contentLength && Number(contentLength) > MAX_BODY_BYTES) return null;
   if (!request.body) return null;
@@ -66,23 +58,27 @@ function isDuplicate(key: string, now = Date.now()) {
   return false;
 }
 
-export async function POST(request: NextRequest) {
+export async function POST(request: Request) {
+  const cors = resolvePublicTelemetryCors(request);
+  if (!cors.allowed) return Response.json({ ok: false }, { status: 403, headers: cors.headers });
+
   if (request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
-    return NextResponse.json({ ok: false }, { status: 415, headers });
+    return Response.json({ ok: false }, { status: 415, headers: cors.headers });
   }
 
   const payload = parseStorefrontEventPayload(await readSmallJsonBody(request));
   if (!payload) {
-    return NextResponse.json({ ok: false }, { status: 400, headers });
+    return Response.json({ ok: false }, { status: 400, headers: cors.headers });
   }
 
   const eventKey = `${payload.technology}:${payload.storeId}:${payload.productId}:${payload.code}`;
-  if (isDuplicate(eventKey)) return NextResponse.json({ ok: true, deduplicated: true }, { headers });
+  if (isDuplicate(eventKey)) return Response.json({ ok: true, deduplicated: true }, { headers: cors.headers });
 
   console.info("Storefront client diagnostic.", payload);
-  return NextResponse.json({ ok: true }, { headers });
+  return Response.json({ ok: true }, { headers: cors.headers });
 }
 
-export async function OPTIONS() {
-  return new Response(null, { status: 204, headers });
+export async function OPTIONS(request: Request) {
+  const cors = resolvePublicTelemetryCors(request);
+  return new Response(null, { status: cors.allowed ? 204 : 403, headers: cors.headers });
 }
