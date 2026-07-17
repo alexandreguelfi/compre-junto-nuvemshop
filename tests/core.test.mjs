@@ -24,6 +24,7 @@ import {
 } from "../src/lib/stores/admin-session-signing.ts";
 import { classifyMatchingOffers } from "../src/lib/storefront/offer-policy.ts";
 import { resolveStoreCandidate } from "../src/lib/storefront/store-resolution.ts";
+import { createShortLivedCache } from "../src/lib/storefront/short-lived-cache.ts";
 
 test("read_products is sufficient because storefront policy contains no product mutation", async () => {
   const source = await import("node:fs/promises").then(({ readFile }) =>
@@ -124,6 +125,62 @@ test("storefront event parser rejects arbitrary, invalid and oversized identifie
   assert.equal(parseStorefrontEventPayload({ ...valid, code: "token=secret" }), null);
   assert.equal(parseStorefrontEventPayload({ ...valid, productId: "1".repeat(31) }), null);
   assert.equal(parseStorefrontEventPayload([valid]), null);
+});
+
+test("short product cache isolates keys, deduplicates concurrency and expires conservatively", async () => {
+  let now = 1_000;
+  let loads = 0;
+  let release;
+  const cache = createShortLivedCache({ maxEntries: 10, now: () => now, ttlMs: 60_000 });
+  const loader = () => {
+    loads += 1;
+    return new Promise((resolve) => { release = resolve; });
+  };
+
+  const first = cache.get("store-a:product-1", loader);
+  const concurrent = cache.get("store-a:product-1", loader);
+  assert.equal(loads, 1);
+  release({ id: "1" });
+  assert.deepEqual(await first, { status: "miss", value: { id: "1" } });
+  assert.deepEqual(await concurrent, { status: "deduplicated", value: { id: "1" } });
+  assert.equal((await cache.get("store-a:product-1", loader)).status, "hit");
+
+  const otherStore = cache.get("store-b:product-1", async () => ({ id: "other-store" }));
+  assert.equal((await otherStore).status, "miss");
+  now += 60_001;
+  const expired = await cache.get("store-a:product-1", async () => ({ id: "fresh" }));
+  assert.deepEqual(expired, { status: "miss", value: { id: "fresh" } });
+
+  let failureLoads = 0;
+  const failureLoader = async () => ({ failed: (++failureLoads, true) });
+  const failureTtl = (value) => value.failed ? 10_000 : 60_000;
+  assert.equal((await cache.get("store-a:failure", failureLoader, failureTtl)).status, "miss");
+  now += 9_999;
+  assert.equal((await cache.get("store-a:failure", failureLoader, failureTtl)).status, "hit");
+  now += 2;
+  assert.equal((await cache.get("store-a:failure", failureLoader, failureTtl)).status, "miss");
+  assert.equal(failureLoads, 2);
+});
+
+test("public offer route caches store/product summaries and skips the NubeSDK principal lookup", async () => {
+  const source = await import("node:fs/promises").then(({ readFile }) =>
+    readFile(new URL("../app/api/public/offers/route.ts", import.meta.url), "utf8"),
+  );
+  assert.match(source, /PRODUCT_SUMMARY_CACHE_TTL_MS = 60_000/);
+  assert.match(source, /PRODUCT_SUMMARY_FAILURE_TTL_MS = 10_000/);
+  assert.match(source, /value\.failed \? PRODUCT_SUMMARY_FAILURE_TTL_MS : PRODUCT_SUMMARY_CACHE_TTL_MS/);
+  assert.match(source, /cacheKey = `\$\{args\.providerStoreId\}:\$\{args\.productId\}`/);
+  assert.match(source, /diagnostic\.technology === "nubesdk"[\s\S]*Promise\.resolve\(null\)/);
+  assert.doesNotMatch(source, /fetch\(`\$\{baseUrl\}\/store`/);
+});
+
+test("script association prefers NubeSDK and keeps legacy only as an unconfigured fallback", async () => {
+  const source = await import("node:fs/promises").then(({ readFile }) =>
+    readFile(new URL("../app/api/admin/scripts/register/route.ts", import.meta.url), "utf8"),
+  );
+  assert.match(source, /legacyScriptId && !nubesdkScriptId/);
+  assert.match(source, /suppressed_nubesdk_configured/);
+  assert.doesNotMatch(source, /method:\s*"DELETE"/);
 });
 
 test("storefront event route enforces JSON, 1 KiB bodies and bounded deduplication", async () => {

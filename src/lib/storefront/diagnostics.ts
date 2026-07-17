@@ -13,6 +13,8 @@ export const STOREFRONT_RESULT_CODES = [
   "suggested_product_lookup_failed",
   "widget_rendered",
   "widget_already_rendered",
+  "offer_request_deduplicated",
+  "legacy_suppressed_nubesdk",
   "cart_add_started",
   "cart_add_success",
   "cart_add_failed",

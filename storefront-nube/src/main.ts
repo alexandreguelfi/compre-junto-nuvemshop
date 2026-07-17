@@ -11,6 +11,11 @@ const RENDER_LOCK_PREFIX = "compre-junto:render-lock:";
 const RENDER_LEASE_MAX_AGE_MS = 5000;
 const RENDER_LEASE_HEARTBEAT_MS = 1500;
 const CART_ADD_TIMEOUT_MS = 8000;
+// This browser-local cache is the first deduplication layer. It is shared by bundle instances,
+// includes no credentials, and keeps valid responses for one minute and failures for ten seconds.
+const OFFER_REQUEST_TTL_MS = 60_000;
+const OFFER_FAILURE_TTL_MS = 10_000;
+const MAX_OFFER_REQUEST_ENTRIES = 100;
 
 const DEBUG_QUERY_KEYS = ["cj_debug", "compre_junto_debug", "nubesdk_debug"] as const;
 
@@ -26,8 +31,24 @@ type IdleCallbackOptions = {
 type IdleCallback = (callback: (deadline: IdleDeadline) => void, options?: IdleCallbackOptions) => unknown;
 
 type BrowserGlobals = typeof globalThis & {
+  __compreJuntoNubeRequests?: OfferRequestState;
   location?: Location;
   requestIdleCallback?: IdleCallback;
+};
+
+type OfferRequestEntry = {
+  expiresAt: number;
+  response: PublicOfferResponse;
+};
+
+type OfferRequestState = {
+  entries: Map<string, OfferRequestEntry>;
+  inFlight: Map<string, Promise<OfferFetchResult>>;
+};
+
+type OfferFetchResult = {
+  response: PublicOfferResponse;
+  ttlMs: number;
 };
 
 type Money = {
@@ -106,6 +127,14 @@ let renderLeaseTimer: ReturnType<typeof setInterval> | undefined;
 
 function getBrowserGlobals() {
   return globalThis as unknown as BrowserGlobals;
+}
+
+function getOfferRequestState() {
+  const globals = getBrowserGlobals();
+  if (!globals.__compreJuntoNubeRequests) {
+    globals.__compreJuntoNubeRequests = { entries: new Map(), inFlight: new Map() };
+  }
+  return globals.__compreJuntoNubeRequests;
 }
 
 function component(value: Record<string, unknown>): NubeComponent {
@@ -882,28 +911,56 @@ export function normalizeSuggestedProduct(context: ProductContext, response: Pub
 }
 
 async function fetchOffer(nube: NubeSDK, context: ProductContext): Promise<PublicOfferResponse> {
+  const contextKey = getContextKey(context);
   const debug = isDiagnosticModeRequested(nube) ? "&cj_debug=1" : "";
+  const requestKey = `${contextKey}:${debug ? "debug" : "standard"}`;
   const url = `${PUBLIC_OFFERS_URL}?productId=${encodeURIComponent(context.mainProduct.productId)}&storeId=${encodeURIComponent(
     context.storeId,
   )}&technology=nubesdk${debug}`;
+  const state = getOfferRequestState();
+  const cached = state.entries.get(requestKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    void reportStorefrontEvent(context, "offer_request_deduplicated");
+    return cached.response;
+  }
+  if (cached) state.entries.delete(requestKey);
 
-  const response = await fetch(url, {
-    cache: "no-store",
-  });
-
-  if (!response.ok) {
-    logWarningOnce("offer_lookup_failed", {
-      status: response.status,
-    });
-
-    return { offer: null };
+  const pending = state.inFlight.get(requestKey);
+  if (pending) {
+    void reportStorefrontEvent(context, "offer_request_deduplicated");
+    return (await pending).response;
   }
 
+  const request = (async () => {
+    try {
+      const response = await fetch(url, { cache: "no-store" });
+      if (!response.ok) {
+        logWarningOnce("offer_lookup_failed", { status: response.status });
+        return { response: { offer: null }, ttlMs: OFFER_FAILURE_TTL_MS };
+      }
+      try {
+        return { response: (await response.json()) as PublicOfferResponse, ttlMs: OFFER_REQUEST_TTL_MS };
+      } catch {
+        logWarningOnce("offer_response_invalid");
+        return { response: { offer: null }, ttlMs: OFFER_FAILURE_TTL_MS };
+      }
+    } catch {
+      logWarningOnce("offer_lookup_failed");
+      return { response: { offer: null }, ttlMs: OFFER_FAILURE_TTL_MS };
+    }
+  })();
+
+  state.inFlight.set(requestKey, request);
   try {
-    return (await response.json()) as PublicOfferResponse;
-  } catch {
-    logWarningOnce("offer_response_invalid");
-    return { offer: null };
+    const result = await request;
+    state.entries.set(requestKey, { expiresAt: Date.now() + result.ttlMs, response: result.response });
+    for (const [key, entry] of state.entries) {
+      if (entry.expiresAt <= Date.now() || state.entries.size > MAX_OFFER_REQUEST_ENTRIES) state.entries.delete(key);
+      if (state.entries.size <= MAX_OFFER_REQUEST_ENTRIES) break;
+    }
+    return result.response;
+  } finally {
+    if (state.inFlight.get(requestKey) === request) state.inFlight.delete(requestKey);
   }
 }
 
@@ -956,6 +1013,13 @@ async function renderDynamicWidget(nube: NubeSDK) {
   const version = ++requestVersion;
 
   try {
+    if (!(await claimRenderLock(nube, context))) {
+      pendingContextKey = "";
+      void reportStorefrontEvent(context, "widget_already_rendered");
+      return;
+    }
+
+    await recordRenderLease(nube, context);
     const offerResponse = await fetchOffer(nube, context);
     const latestContext = readProductContext(nube);
 
@@ -965,13 +1029,6 @@ async function renderDynamicWidget(nube: NubeSDK) {
     if (!suggestedProduct) {
       pendingContextKey = "";
       renderDiagnostic(nube, offerResponse);
-      return;
-    }
-
-    if (!(await claimRenderLock(nube, context))) {
-      pendingContextKey = "";
-      void reportStorefrontEvent(context, "widget_already_rendered");
-      setTimeout(() => void renderDynamicWidget(nube), RENDER_LEASE_MAX_AGE_MS);
       return;
     }
 
@@ -1001,8 +1058,11 @@ async function renderDynamicWidget(nube: NubeSDK) {
 
 function scheduleAfterCriticalPaint(render: () => void) {
   let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
+  let completed = false;
 
   const run = () => {
+    if (completed) return;
+    completed = true;
     if (fallbackTimer) {
       clearTimeout(fallbackTimer);
       fallbackTimer = undefined;

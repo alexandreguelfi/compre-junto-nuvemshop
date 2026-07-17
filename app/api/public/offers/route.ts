@@ -13,6 +13,7 @@ import {
 } from "@/src/lib/storefront/diagnostics";
 import { classifyMatchingOffers } from "@/src/lib/storefront/offer-policy";
 import { resolveStoreCandidate } from "@/src/lib/storefront/store-resolution";
+import { createShortLivedCache, type ShortLivedCacheStatus } from "@/src/lib/storefront/short-lived-cache";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -20,6 +21,15 @@ export const runtime = "nodejs";
 const NUVEMSHOP_API_VERSION = "2025-03";
 const NUVEMSHOP_API_BASE_URL = `https://api.tiendanube.com/${NUVEMSHOP_API_VERSION}`;
 const USER_AGENT = "CompreJuntoNuvemshop atendimento@casasmartnest.com.br";
+// Secondary protection only: cache valid public product summaries for one minute and
+// temporary upstream failures for ten seconds, avoiding both bursts and long failure freezes.
+// Keys are tenant/product scoped; access tokens and headers are never stored in the cache.
+const PRODUCT_SUMMARY_CACHE_TTL_MS = 60_000;
+const PRODUCT_SUMMARY_FAILURE_TTL_MS = 10_000;
+const productSummaryCache = createShortLivedCache<{ failed: boolean; product: PublicProductSummary }>({
+  maxEntries: 1_000,
+  ttlMs: PRODUCT_SUMMARY_CACHE_TTL_MS,
+});
 
 const publicOfferHeaders = {
   "Access-Control-Allow-Headers": "Content-Type",
@@ -83,8 +93,22 @@ function getRequestDiagnostic(request: NextRequest): RequestDiagnostic {
 function logStorefrontResult(diagnostic: RequestDiagnostic, code: StorefrontResultCode, details = {}) {
   console.info("Storefront offer diagnostic.", {
     code,
-    productId: diagnostic.productId,
-    storeId: diagnostic.providerStoreId,
+    productId: isSafeNuvemshopId(diagnostic.productId) ? diagnostic.productId : null,
+    storeId: isSafeNuvemshopId(diagnostic.providerStoreId) ? diagnostic.providerStoreId : null,
+    technology: diagnostic.technology,
+    ...details,
+  });
+}
+
+function logOfferTelemetry(
+  diagnostic: RequestDiagnostic,
+  event: "cache_hit" | "cache_miss" | "external_principal_product" | "external_suggested_product" | "public_offer_call" | "request_deduplicated",
+  details: Record<string, string | boolean> = {},
+) {
+  console.info("Storefront offer telemetry.", {
+    event,
+    productId: isSafeNuvemshopId(diagnostic.productId) ? diagnostic.productId : null,
+    storeId: isSafeNuvemshopId(diagnostic.providerStoreId) ? diagnostic.providerStoreId : null,
     technology: diagnostic.technology,
     ...details,
   });
@@ -263,14 +287,20 @@ function fallbackProduct(productId: string, name: string): PublicProductSummary 
   };
 }
 
-function normalizeProductSummary(product: Record<string, unknown>, productId: string, fallbackName: string, url: string | null) {
+function normalizeProductSummary(
+  product: Record<string, unknown>,
+  productId: string,
+  fallbackName: string,
+  url: string | null,
+  path = normalizePublicPath(url),
+) {
   const variant = readProductVariant(product);
   return {
     compareAtPrice: readPrice(variant?.compare_at_price),
     id: cleanId(product.id) ?? productId,
     imageUrl: readPrimaryImageUrl(product),
     name: readLocalizedValue(product.name) ?? fallbackName,
-    path: normalizePublicPath(url),
+    path,
     price: readPrice(variant?.price),
     promotionalPrice: readPrice(variant?.promotional_price),
     url,
@@ -283,44 +313,62 @@ async function getProductSummary(args: {
   fallbackName: string;
   productId: string;
   providerStoreId: string;
+  role: "principal" | "suggested";
+  telemetry: RequestDiagnostic;
 }): Promise<{ failed: boolean; product: PublicProductSummary }> {
   const baseUrl = `${NUVEMSHOP_API_BASE_URL}/${encodeURIComponent(args.providerStoreId)}`;
   const headers = { Accept: "application/json", Authorization: `Bearer ${args.accessToken}`, "User-Agent": USER_AGENT };
+  const cacheKey = `${args.providerStoreId}:${args.productId}`;
+  const cached = await productSummaryCache.get(
+    cacheKey,
+    async () => {
+      logOfferTelemetry(
+        args.telemetry,
+        args.role === "principal" ? "external_principal_product" : "external_suggested_product",
+        { externalProductId: args.productId },
+      );
+      try {
+        const response = await fetch(`${baseUrl}/products/${encodeURIComponent(args.productId)}`, {
+          headers,
+          cache: "no-store",
+        });
+        if (!response.ok) return { failed: true, product: fallbackProduct(args.productId, args.fallbackName) };
 
-  try {
-    const response = await fetch(`${baseUrl}/products/${encodeURIComponent(args.productId)}`, {
-      headers,
-      cache: "no-store",
-    });
-    if (!response.ok) return { failed: true, product: fallbackProduct(args.productId, args.fallbackName) };
+        const product = await readJsonObject(response);
+        if (!product || cleanId(product.id) !== args.productId) {
+          return { failed: true, product: fallbackProduct(args.productId, args.fallbackName) };
+        }
 
-    const product = await readJsonObject(response);
-    if (!product) return { failed: true, product: fallbackProduct(args.productId, args.fallbackName) };
-    if (cleanId(product.id) !== args.productId) {
-      return { failed: true, product: fallbackProduct(args.productId, args.fallbackName) };
-    }
+        const canonicalUrl = normalizePublicUrl(product.canonical_url);
+        if (canonicalUrl) {
+          return { failed: false, product: normalizeProductSummary(product, args.productId, args.fallbackName, canonicalUrl) };
+        }
 
-    const canonicalUrl = normalizePublicUrl(product.canonical_url);
-    if (canonicalUrl) return { failed: false, product: normalizeProductSummary(product, args.productId, args.fallbackName, canonicalUrl) };
+        const handle = readLocalizedValue(product.handle);
+        const path = handle ? `/produtos/${encodeURIComponent(handle)}/` : null;
+        return { failed: false, product: normalizeProductSummary(product, args.productId, args.fallbackName, null, path) };
+      } catch {
+        return { failed: true, product: fallbackProduct(args.productId, args.fallbackName) };
+      }
+    },
+    (value) => (value.failed ? PRODUCT_SUMMARY_FAILURE_TTL_MS : PRODUCT_SUMMARY_CACHE_TTL_MS),
+  );
 
-    const handle = readLocalizedValue(product.handle);
-    if (!handle) return { failed: false, product: normalizeProductSummary(product, args.productId, args.fallbackName, null) };
-
-    const storeResponse = await fetch(`${baseUrl}/store`, { headers, cache: "no-store" });
-    const store = storeResponse.ok ? await readJsonObject(storeResponse) : null;
-    const originalDomain = readLocalizedValue(store?.original_domain);
-    const url = originalDomain
-      ? normalizePublicUrl(`${originalDomain.startsWith("http") ? originalDomain : `https://${originalDomain}`}/produtos/${handle}/`)
-      : null;
-
-    return { failed: false, product: normalizeProductSummary(product, args.productId, args.fallbackName, url) };
-  } catch {
-    return { failed: true, product: fallbackProduct(args.productId, args.fallbackName) };
-  }
+  const telemetryEvent: Record<ShortLivedCacheStatus, "cache_hit" | "cache_miss" | "request_deduplicated"> = {
+    deduplicated: "request_deduplicated",
+    hit: "cache_hit",
+    miss: "cache_miss",
+  };
+  logOfferTelemetry(args.telemetry, telemetryEvent[cached.status], {
+    cacheKey: `${args.providerStoreId}:${args.productId}`,
+    productRole: args.role,
+  });
+  return cached.value;
 }
 
 export async function GET(request: NextRequest) {
   const diagnostic = getRequestDiagnostic(request);
+  logOfferTelemetry(diagnostic, "public_offer_call");
   logStorefrontResult(diagnostic, "storefront_script_loaded");
 
   if (!isSafeNuvemshopId(diagnostic.productId)) {
@@ -365,22 +413,30 @@ export async function GET(request: NextRequest) {
     if (!offer) return offerNotFound(diagnostic, availability.code);
 
     const accessToken = decryptAccessTokenFromStorage(lookup.store.accessTokenCiphertext);
-    const [principalResult, suggestedResult] = await Promise.all([
-      getProductSummary({
+    const principalRequest =
+      diagnostic.technology === "nubesdk"
+        ? Promise.resolve(null)
+        : getProductSummary({
         accessToken,
         fallbackName: offer.triggers[0]?.triggerProductName ?? `Produto ${diagnostic.productId}`,
         productId: diagnostic.productId,
         providerStoreId: lookup.store.providerStoreId,
-      }),
+        role: "principal",
+        telemetry: diagnostic,
+      });
+    const [principalResult, suggestedResult] = await Promise.all([
+      principalRequest,
       getProductSummary({
         accessToken,
         fallbackName: offer.suggestedProductName,
         productId: offer.suggestedProductId,
         providerStoreId: lookup.store.providerStoreId,
+        role: "suggested",
+        telemetry: diagnostic,
       }),
     ]);
     const resultCode = suggestedResult.failed ? "suggested_product_lookup_failed" : "offer_found";
-    logStorefrontResult(diagnostic, resultCode, { principalProductLookupFailed: principalResult.failed });
+    logStorefrontResult(diagnostic, resultCode, { principalProductLookupFailed: principalResult?.failed ?? false });
 
     if (suggestedResult.failed) {
       return publicJson({ offer: null, ...diagnosticBody(diagnostic, resultCode) });
@@ -388,7 +444,7 @@ export async function GET(request: NextRequest) {
 
     return publicJson({
       offer: {
-        principalProduct: principalResult.product,
+        ...(principalResult ? { principalProduct: principalResult.product } : {}),
         principalProductId: diagnostic.productId,
         suggestedProduct: suggestedResult.product,
       },
@@ -398,8 +454,8 @@ export async function GET(request: NextRequest) {
     console.warn("Public offer lookup failed.", {
       code: "offer_not_found",
       name: error instanceof Error ? error.name : "unknown",
-      productId: diagnostic.productId,
-      storeId: diagnostic.providerStoreId,
+      productId: isSafeNuvemshopId(diagnostic.productId) ? diagnostic.productId : null,
+      storeId: isSafeNuvemshopId(diagnostic.providerStoreId) ? diagnostic.providerStoreId : null,
       technology: diagnostic.technology,
     });
     return publicJson({ offer: null, ...diagnosticBody(diagnostic, "offer_not_found") }, 500);

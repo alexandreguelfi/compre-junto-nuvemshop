@@ -5,6 +5,7 @@ import test from "node:test";
 
 import {
   claimRenderLock,
+  App,
   getBundleCartItems,
   normalizeSuggestedProduct,
   readProductContext,
@@ -47,6 +48,7 @@ function nubeWithState(state, initialLocks = {}) {
 
 function productState(productId = 123, storeId = 7901767) {
   return {
+    cart: { items: [] },
     location: { page: { type: "product", data: { product: product(productId) } }, queries: {} },
     store: {
       id: storeId,
@@ -54,6 +56,7 @@ function productState(productId = 123, storeId = 7901767) {
       currency: "BRL",
       currency_details: { code: "BRL", display_short: "R$" },
     },
+    ui: { slots: {} },
   };
 }
 
@@ -229,6 +232,284 @@ test("legacy script uses the official app origin when Nuvemshop serves it from a
   assert.notEqual(document.getElementById("compre-junto-widget-root"), null);
 });
 
+test("legacy checks NubeSDK ownership before network and never creates a periodic retry", async () => {
+  const urls = [];
+  const beacons = [];
+  const timers = [];
+  const listeners = new Map();
+  let observerCount = 0;
+  const key = "compre-junto:render-lock:7895581:352812666";
+  const storage = new Map([[key, JSON.stringify({ renderedAt: Date.now(), technology: "nubesdk" })]]);
+  const script = {
+    dataset: { productId: "352812666", storeId: "7895581" },
+    getAttribute(name) { return name === "data-product-id" ? "352812666" : name === "data-store-id" ? "7895581" : ""; },
+    setAttribute() {},
+    src: "https://apps-scripts.tiendanube.com/store/7895581/script/8403.js",
+  };
+  const window = {
+    addEventListener(name, callback) {
+      const callbacks = listeners.get(name) ?? [];
+      callbacks.push(callback);
+      listeners.set(name, callbacks);
+    },
+    location: { href: "https://loja.example/produtos/x/", origin: "https://loja.example", search: "" },
+    sessionStorage: { getItem: (item) => storage.get(item) ?? null, setItem: (item, value) => storage.set(item, value) },
+  };
+  const document = {
+    currentScript: script,
+    addEventListener() {},
+    getElementById() { return null; },
+    getElementsByTagName() { return [script]; },
+    querySelector() { return null; },
+  };
+  const context = {
+    Blob,
+    URL,
+    URLSearchParams,
+    document,
+    fetch: async (url) => { urls.push(String(url)); return { json: async () => ({ offer: null }) }; },
+    Intl,
+    Map,
+    MutationObserver: class { constructor() { observerCount += 1; } },
+    navigator: { sendBeacon: (url) => void beacons.push(String(url)) },
+    clearInterval() {},
+    setInterval: () => 1,
+    setTimeout: (callback) => (timers.push(callback), timers.length),
+    window,
+  };
+  window.window = window;
+
+  vm.runInNewContext(widgetScript, context);
+  document.currentScript = script;
+  vm.runInNewContext(widgetScript, context);
+  for (const name of ["page:loaded", "location:updated", "pageshow"]) {
+    for (const callback of listeners.get(name) ?? []) callback();
+  }
+  while (timers.length) timers.shift()();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(urls.filter((url) => url.includes("/api/public/offers")).length, 0);
+  assert.equal(beacons.length, 1);
+  assert.equal(observerCount, 0);
+  assert.equal(timers.length, 0);
+});
+
+test("multiple legacy instances and nearby events share one failed request without retry", async () => {
+  const urls = [];
+  const timers = [];
+  const listeners = new Map();
+  let now = Date.now();
+  class ScenarioDate extends Date {}
+  ScenarioDate.now = () => now;
+  const script = {
+    dataset: { productId: "901", storeId: "7895581" },
+    getAttribute(name) { return name === "data-product-id" ? "901" : name === "data-store-id" ? "7895581" : ""; },
+    setAttribute() {},
+    src: "https://apps-scripts.tiendanube.com/store/7895581/script/8403.js",
+  };
+  const window = {
+    addEventListener(name, callback) {
+      const callbacks = listeners.get(name) ?? [];
+      callbacks.push(callback);
+      listeners.set(name, callbacks);
+    },
+    location: { href: "https://loja.example/produtos/901/", search: "" },
+    sessionStorage: { getItem: () => null, setItem() {} },
+  };
+  const document = {
+    currentScript: script,
+    addEventListener() {},
+    getElementById() { return null; },
+    getElementsByTagName() { return [script]; },
+    querySelector() { return null; },
+  };
+  const context = {
+    Blob,
+    Date: ScenarioDate,
+    URL,
+    URLSearchParams,
+    document,
+    fetch: async (url) => {
+      if (String(url).includes("/api/public/offers")) urls.push(String(url));
+      throw new Error("temporary failure");
+    },
+    Intl,
+    Map,
+    navigator: { sendBeacon() {} },
+    clearInterval() {},
+    setInterval: () => 1,
+    setTimeout: (callback) => (timers.push(callback), timers.length),
+    window,
+  };
+  window.window = window;
+
+  vm.runInNewContext(widgetScript, context);
+  vm.runInNewContext(widgetScript, context);
+  for (const callback of listeners.get("page:loaded") ?? []) callback();
+  while (timers.length) timers.shift()();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(urls.length, 1);
+  assert.equal(timers.length, 0);
+
+  for (const callback of listeners.get("pageshow") ?? []) callback();
+  while (timers.length) timers.shift()();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(urls.length, 1);
+  assert.equal(timers.length, 0);
+
+  now += 10_001;
+  for (const callback of listeners.get("pageshow") ?? []) callback();
+  while (timers.length) timers.shift()();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(urls.length, 2);
+  assert.equal(timers.length, 0);
+});
+
+test("NubeSDK deduplicates initial events, SPA navigation, A return and variant changes", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalIdle = globalThis.requestIdleCallback;
+  const offerUrls = [];
+  const state = productState(700, 7895581);
+  const handlers = new Map();
+  const locks = new Map();
+  const nube = {
+    clearSlot(slot) { delete state.ui.slots[slot]; },
+    getBrowserAPIs: () => ({ asyncSessionStorage: { getItem: async (key) => locks.get(key) ?? null, setItem: async (key, value) => void locks.set(key, value) } }),
+    getState: () => state,
+    on(name, callback) {
+      const callbacks = handlers.get(name) ?? [];
+      callbacks.push(callback);
+      handlers.set(name, callbacks);
+    },
+    render(slot, block) { state.ui.slots[slot] = block; },
+    send() {},
+  };
+  const flush = async () => {
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+  };
+
+  delete globalThis.__compreJuntoNubeRequests;
+  globalThis.requestIdleCallback = (callback) => callback({ didTimeout: false, timeRemaining: () => 10 });
+  globalThis.fetch = async (url) => {
+    const value = String(url);
+    if (value.includes("/api/public/offers")) {
+      offerUrls.push(value);
+      const productId = new URL(value).searchParams.get("productId");
+      return {
+        ok: true,
+        json: async () => ({ offer: { principalProductId: productId, suggestedProduct: { id: "999", name: "Sugerido", price: "20.00", variantId: "9990" } } }),
+      };
+    }
+    return { ok: true, json: async () => ({ ok: true }) };
+  };
+
+  try {
+    App(nube);
+    for (const callback of handlers.get("page:loaded") ?? []) callback(state);
+    for (const callback of handlers.get("location:updated") ?? []) callback(state);
+    await flush();
+    assert.equal(offerUrls.length, 1);
+
+    state.location.page.data.product = product(701);
+    for (const callback of handlers.get("location:updated") ?? []) callback(state);
+    await flush();
+    assert.equal(offerUrls.length, 2);
+
+    state.location.page.data.product = product(700);
+    for (const callback of handlers.get("location:updated") ?? []) callback(state);
+    await flush();
+    assert.equal(offerUrls.length, 2);
+
+    const variantState = { eventPayload: { id: 7001, price: "11.00", product_id: 700, stock: 1, stock_management: true } };
+    for (const callback of handlers.get("product:variant_selected") ?? []) callback(variantState);
+    await flush();
+    assert.equal(offerUrls.length, 2);
+
+    state.location.page = { type: "home", data: {} };
+    for (const callback of handlers.get("location:updated") ?? []) callback(state);
+    await flush();
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalIdle) globalThis.requestIdleCallback = originalIdle;
+    else delete globalThis.requestIdleCallback;
+    delete globalThis.__compreJuntoNubeRequests;
+  }
+});
+
+test("NubeSDK caches a temporary offer failure and performs no aggressive retry", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalIdle = globalThis.requestIdleCallback;
+  const originalDateNow = Date.now;
+  let now = originalDateNow();
+  const state = productState(800, 7895581);
+  const handlers = new Map();
+  const locks = new Map();
+  let offerCalls = 0;
+  const nube = {
+    clearSlot(slot) { delete state.ui.slots[slot]; },
+    getBrowserAPIs: () => ({ asyncSessionStorage: { getItem: async (key) => locks.get(key) ?? null, setItem: async (key, value) => void locks.set(key, value) } }),
+    getState: () => state,
+    on(name, callback) {
+      const callbacks = handlers.get(name) ?? [];
+      callbacks.push(callback);
+      handlers.set(name, callbacks);
+    },
+    render(slot, block) { state.ui.slots[slot] = block; },
+    send() {},
+  };
+  const flush = async () => {
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+  };
+
+  delete globalThis.__compreJuntoNubeRequests;
+  Date.now = () => now;
+  globalThis.requestIdleCallback = (callback) => callback({ didTimeout: false, timeRemaining: () => 10 });
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("/api/public/offers")) {
+      offerCalls += 1;
+      if (offerCalls === 1) throw new Error("temporary failure");
+      return { ok: true, json: async () => ({ offer: null }) };
+    }
+    return { ok: true, json: async () => ({ ok: true }) };
+  };
+
+  try {
+    App(nube);
+    for (const callback of handlers.get("page:loaded") ?? []) callback(state);
+    for (const callback of handlers.get("location:updated") ?? []) callback(state);
+    await flush();
+    assert.equal(offerCalls, 1);
+
+    for (const callback of handlers.get("page:loaded") ?? []) callback(state);
+    for (const callback of handlers.get("location:updated") ?? []) callback(state);
+    await flush();
+    assert.equal(offerCalls, 1);
+
+    now += 10_001;
+    for (const callback of handlers.get("page:loaded") ?? []) callback(state);
+    await flush();
+    assert.equal(offerCalls, 2);
+
+    now += 10_001;
+    for (const callback of handlers.get("location:updated") ?? []) callback(state);
+    await flush();
+    assert.equal(offerCalls, 2);
+
+    now += 50_000;
+    for (const callback of handlers.get("location:updated") ?? []) callback(state);
+    await flush();
+    assert.equal(offerCalls, 3);
+  } finally {
+    Date.now = originalDateNow;
+    globalThis.fetch = originalFetch;
+    if (originalIdle) globalThis.requestIdleCallback = originalIdle;
+    else delete globalThis.requestIdleCallback;
+    delete globalThis.__compreJuntoNubeRequests;
+  }
+});
+
 test("storefront scripts include safe error, timeout, cart and SPA handling", async () => {
   const nubeSource = await readFile(new URL("../storefront-nube/src/main.ts", import.meta.url), "utf8");
   assert.match(nubeSource, /CART_ADD_TIMEOUT_MS = 8000/);
@@ -236,7 +517,9 @@ test("storefront scripts include safe error, timeout, cart and SPA handling", as
   assert.match(nubeSource, /location:updated/);
   assert.match(nubeSource, /clearSlot\(TARGET_SLOT\)/);
   assert.match(widgetScript, /\.catch\(function \(\) \{\}\)/);
-  assert.match(widgetScript, /MutationObserver/);
+  assert.doesNotMatch(widgetScript, /MutationObserver/);
+  assert.doesNotMatch(widgetScript, /setTimeout\(scheduleRefresh, LEASE_MAX_AGE_MS\)/);
+  assert.match(widgetScript, /if \(isNubeOwner\(context\)\)[\s\S]*fetch\(buildOfferUrl/);
   assert.doesNotMatch(widgetScript, /Tiendanube\.addToCart/);
   assert.match(widgetScript, /Ver produto recomendado/);
   assert.match(widgetScript, /recordRendered\(context\)/);

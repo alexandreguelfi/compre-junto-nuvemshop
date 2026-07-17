@@ -12,14 +12,24 @@ export const widgetScript = String.raw`
   var APP_ORIGIN = "https://compre-junto-nuvemshop-production.up.railway.app";
   var LEASE_MAX_AGE_MS = 5000;
   var LEASE_HEARTBEAT_MS = 1500;
+  var FALLBACK_DELAY_MS = 1500;
+  // Shared across legacy script instances; valid responses live for one minute and failures for ten seconds.
+  var REQUEST_TTL_MS = 60000;
+  var FAILURE_TTL_MS = 10000;
+  var REQUEST_STATE_KEY = "__compreJuntoLegacyRequests";
   var technology = "legacy";
   var requestVersion = 0;
   var activeKey = "";
   var renderedKey = "";
   var scheduled = false;
   var renderLeaseTimer = null;
-  var blockedKey = "";
-  var blockedUntil = 0;
+
+  function getRequestState() {
+    if (!window[REQUEST_STATE_KEY]) {
+      window[REQUEST_STATE_KEY] = { entries: new Map(), historyPatched: false, inFlight: new Map(), suppressions: new Map() };
+    }
+    return window[REQUEST_STATE_KEY];
+  }
 
   function cleanId(value) {
     if (typeof value === "number" && isFinite(value)) return String(value);
@@ -187,6 +197,36 @@ export const widgetScript = String.raw`
     }
   }
 
+  function isNubeOwner(context) {
+    var root = document.getElementById(ROOT_ID);
+    if (
+      root &&
+      root.getAttribute("data-compre-junto-technology") === "nubesdk" &&
+      (!root.getAttribute("data-compre-junto-key") || root.getAttribute("data-compre-junto-key") === context.key)
+    ) return true;
+    var existing = readLock(context);
+    if (!existing) return false;
+    try {
+      var lease = JSON.parse(existing);
+      return (
+        lease.technology === "nubesdk" &&
+        typeof lease.renderedAt === "number" &&
+        Date.now() - lease.renderedAt >= 0 &&
+        Date.now() - lease.renderedAt < LEASE_MAX_AGE_MS
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function reportNubeSuppression(script, context) {
+    var state = getRequestState();
+    var previous = state.suppressions.get(context.key) || 0;
+    if (Date.now() - previous < REQUEST_TTL_MS) return;
+    state.suppressions.set(context.key, Date.now());
+    report(script, context, "legacy_suppressed_nubesdk");
+  }
+
   function recordRendered(context) {
     try {
       window.sessionStorage.setItem(lockKey(context), JSON.stringify({ renderedAt: Date.now(), technology: technology }));
@@ -285,10 +325,7 @@ export const widgetScript = String.raw`
     var container = findContainer(script);
     if (!container) return;
     if (!claimRender(context)) {
-      blockedKey = context.key;
-      blockedUntil = Date.now() + LEASE_MAX_AGE_MS;
       report(script, context, "widget_already_rendered");
-      setTimeout(scheduleRefresh, LEASE_MAX_AGE_MS);
       return;
     }
 
@@ -319,8 +356,6 @@ export const widgetScript = String.raw`
     if (document.getElementById(ROOT_ID) !== root) return;
     activeKey = context.key;
     renderedKey = context.key;
-    blockedKey = "";
-    blockedUntil = 0;
     startRenderLeaseHeartbeat(context, root);
     report(script, context, "widget_rendered");
   }
@@ -357,14 +392,11 @@ export const widgetScript = String.raw`
       stopRenderLeaseHeartbeat();
       activeKey = "";
       renderedKey = "";
-      blockedKey = "";
-      blockedUntil = 0;
       return;
     }
-    if (context.key === blockedKey && Date.now() < blockedUntil) return;
-    if (context.key !== blockedKey) {
-      blockedKey = "";
-      blockedUntil = 0;
+    if (isNubeOwner(context)) {
+      reportNubeSuppression(script, context);
+      return;
     }
     if (context.key === activeKey) {
       if (!renderedKey) return;
@@ -387,13 +419,48 @@ export const widgetScript = String.raw`
       renderedKey = "";
     }
 
+    var state = getRequestState();
+    var requestKey = context.key + (debugRequested() ? ":debug" : ":standard");
+    var cached = state.entries.get(requestKey);
+    var request;
+    if (cached && cached.expiresAt > Date.now()) {
+      report(script, context, "offer_request_deduplicated");
+      request = Promise.resolve(cached.payload);
+    } else if (state.inFlight.has(requestKey)) {
+      report(script, context, "offer_request_deduplicated");
+      request = state.inFlight.get(requestKey);
+    } else {
+      if (cached) state.entries.delete(requestKey);
+      request = fetch(buildOfferUrl(script, context), { headers: { Accept: "application/json" }, cache: "no-store" })
+        .then(function (response) {
+          if (response.ok === false) return { failed: true, payload: null };
+          return response.json()
+            .then(function (payload) { return { failed: !payload, payload: payload }; })
+            .catch(function () { return { failed: true, payload: null }; });
+        })
+        .catch(function () { return { failed: true, payload: null }; })
+        .then(function (result) {
+          state.entries.set(requestKey, {
+            expiresAt: Date.now() + (result.failed ? FAILURE_TTL_MS : REQUEST_TTL_MS),
+            payload: result.payload
+          });
+          return result.payload;
+        });
+      state.inFlight.set(requestKey, request);
+      var clearInFlight = function () {
+        if (state.inFlight.get(requestKey) === request) state.inFlight.delete(requestKey);
+      };
+      request.then(clearInFlight, clearInFlight);
+    }
+
     var version = ++requestVersion;
-    fetch(buildOfferUrl(script, context), { headers: { Accept: "application/json" }, cache: "no-store" })
-      .then(function (response) {
-        return response.json().catch(function () { return null; });
-      })
+    request
       .then(function (payload) {
         if (version !== requestVersion || !payload) return;
+        if (isNubeOwner(context)) {
+          reportNubeSuppression(script, context);
+          return;
+        }
         if (!payload.offer) {
           activeKey = context.key;
           renderedKey = "";
@@ -401,23 +468,38 @@ export const widgetScript = String.raw`
           return;
         }
         renderOffer(script, context, payload.offer);
-      })
-      .catch(function () {});
+      });
   }
 
   function scheduleRefresh() {
     if (scheduled) return;
     scheduled = true;
-    setTimeout(refresh, 80);
+    setTimeout(refresh, FALLBACK_DELAY_MS);
   }
 
+  function patchHistoryOnce() {
+    var state = getRequestState();
+    if (state.historyPatched || !window.history || typeof window.dispatchEvent !== "function") return;
+    state.historyPatched = true;
+    ["pushState", "replaceState"].forEach(function (method) {
+      var original = window.history[method];
+      if (typeof original !== "function") return;
+      window.history[method] = function () {
+        var result = original.apply(this, arguments);
+        try { window.dispatchEvent(new Event("compre-junto:location-change")); } catch (error) {}
+        return result;
+      };
+    });
+  }
+
+  patchHistoryOnce();
   window.addEventListener("popstate", scheduleRefresh);
   window.addEventListener("hashchange", scheduleRefresh);
   window.addEventListener("pageshow", scheduleRefresh);
+  window.addEventListener("page:loaded", scheduleRefresh);
+  window.addEventListener("location:updated", scheduleRefresh);
+  window.addEventListener("compre-junto:location-change", scheduleRefresh);
   document.addEventListener("DOMContentLoaded", scheduleRefresh);
-  if (window.MutationObserver && document.documentElement) {
-    new MutationObserver(scheduleRefresh).observe(document.documentElement, { childList: true, subtree: true });
-  }
   scheduleRefresh();
 })();
 `;

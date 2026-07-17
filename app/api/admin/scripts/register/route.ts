@@ -69,7 +69,9 @@ function getScriptConfigs(providerStoreId: string): StorefrontScriptConfig[] {
   const nubesdkScriptId = readOfficialScriptId(process.env.NUVEMSHOP_NUBESDK_SCRIPT_ID);
   const configs: StorefrontScriptConfig[] = [];
 
-  if (legacyScriptId) {
+  // NubeSDK is the official runtime. Legacy is associated only when NubeSDK is not configured;
+  // already-associated legacy scripts remain safe as a storefront-side strict fallback.
+  if (legacyScriptId && !nubesdkScriptId) {
     configs.push({
       kind: "legacy",
       scriptId: legacyScriptId,
@@ -154,7 +156,12 @@ export async function POST(request: NextRequest) {
     const plan = planScriptRegistrations(configs, registeredScriptIds);
     const configuredKinds = new Set(configs.map((config) => config.kind));
     const results: Array<Record<string, unknown>> = [];
-    if (!configuredKinds.has("legacy")) results.push({ kind: "legacy", status: "configuration_missing" });
+    if (!configuredKinds.has("legacy")) {
+      results.push({
+        kind: "legacy",
+        status: configuredKinds.has("nubesdk") ? "suppressed_nubesdk_configured" : "configuration_missing",
+      });
+    }
     if (!configuredKinds.has("nubesdk")) results.push({ kind: "nubesdk", status: "configuration_missing" });
 
     for (const item of plan) {
